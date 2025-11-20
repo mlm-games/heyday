@@ -1,11 +1,11 @@
 [package]
 name = "backend_aur"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
-ureq = { version = "3", features = ["json"] }
-serde = { version = "1", features = ["derive"] }
-urlencoding = "2"
-tempfile = "3"
+ureq.workspace = true
+serde.workspace = true
+urlencoding.workspace = true
+tempfile.workspace = true

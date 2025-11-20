@@ -1,9 +1,9 @@
 [package]
 name = "backend_pacman"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
-regex = "1.12.2"
-nix = { version = "0.30.1", default-features = false, features = ["signal"] }
+regex.workspace = true
+nix.workspace = true

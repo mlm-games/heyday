@@ -1,10 +1,10 @@
 [package]
 name = "app_ui"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 repose-ui = "*"
 repose-core = "*"
 domain = { path = "../domain" }
-crossbeam-channel = "0.5.15"
+crossbeam-channel.workspace = true

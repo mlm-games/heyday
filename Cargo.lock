@@ -140,7 +140,7 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
 name = "app_shell"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "app_ui",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "app_ui"
-version = "0.1.0"
+version = "0.1.9"
 dependencies = [
  "crossbeam-channel",
  "domain",
@@ -227,7 +227,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "backend_aur"
-version = "0.1.0"
+version = "0.1.9"
 dependencies = [
  "domain",
  "serde",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "backend_pacman"
-version = "0.1.0"
+version = "0.1.9"
 dependencies = [
  "domain",
  "nix",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.1.0"
+version = "0.1.9"
 dependencies = [
  "crossbeam-channel",
  "parking_lot",

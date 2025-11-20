@@ -6,7 +6,25 @@ members = [
   "crates/app_ui",
   "crates/app_shell",
 ]
-resolver = "2"
+resolver = "3"
+
+[workspace.package]
+version = "0.1.9"
+edition = "2024"
+
+[workspace.dependencies]
+crossbeam-channel = "0.5.15"
+thiserror = "2"
+parking_lot = "0.12"
+anyhow = "1"
+env_logger = "0.11"
+regex = "1.12.2"
+nix = { version = "0.30.1", default-features = false, features = ["signal"] }
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+urlencoding = "2"
+tempfile = "3"
+notify = "8"
 
 [profile.release]
 lto = "fat"
