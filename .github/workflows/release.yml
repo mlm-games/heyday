@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          CARGO_TOML="crates/app_shell/Cargo.toml"
+          CARGO_TOML="Cargo.toml"
 
           OLD_VERSION=$(grep -m1 '^version\s*=\s*"' "$CARGO_TOML" | sed -E 's/.*"([^"]+)".*/\1/')
           if [[ -z "$OLD_VERSION" ]]; then

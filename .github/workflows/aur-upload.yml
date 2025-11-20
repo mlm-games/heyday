@@ -67,12 +67,14 @@ jobs:
         run: |
           ver="${{ inputs.version_name }}"
           tag="${{ inputs.version_name }}"
+          pkgver="${ver#v}"
           mkdir -p aur-package
           cat > aur-package/PKGBUILD <<'EOF'
           # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
           pkgname=soredowe-bin
           _pkgname=soredowe
-          pkgver={{VER}}
+          pkgver={{PKGVER}}
+          _tag={{TAG}}
           pkgrel={{PKGREL}}
           pkgdesc="Experimental GUI for pacman/AUR users who prefer it (Wayland/Vulkan)"
           arch=('x86_64' 'aarch64')
@@ -86,8 +88,8 @@ jobs:
           conflicts=('soredowe')
           options=('!strip')
 
-          source_x86_64=("${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/soredowe/releases/download/${pkgver}/${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
-          source_aarch64=("${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/soredowe/releases/download/${pkgver}/${_pkgname}-${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
+          source_x86_64=("${_pkgname}-${_tag}-x86_64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/soredowe/releases/download/${_tag}/${_pkgname}-${_tag}-x86_64-unknown-linux-gnu.tar.gz")
+          source_aarch64=("${_pkgname}-${_tag}-aarch64-unknown-linux-gnu.tar.gz::https://github.com/mlm-games/soredowe/releases/download/${_tag}/${_pkgname}-${_tag}-aarch64-unknown-linux-gnu.tar.gz")
           # Icon
           source=("icon.svg::https://raw.githubusercontent.com/mlm-games/soredowe/refs/heads/main/packaging/icons/hicolor/scalable/apps/soredowe.svg")
 
@@ -103,7 +105,7 @@ jobs:
               target="aarch64-unknown-linux-gnu"
             fi
 
-            local dir="${srcdir}/${_pkgname}-${pkgver}-${target}"
+            local dir="${srcdir}/${_pkgname}-${_tag}-${target}"
             install -Dm755 "${dir}/${_pkgname}" "${pkgdir}/usr/bin/${_pkgname}"
 
             install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/${_pkgname}.desktop" << DESKTOP_EOF
@@ -125,6 +127,8 @@ jobs:
 
           # Inject values
           sed -i "s/{{VER}}/${ver}/g" aur-package/PKGBUILD
+          sed -i "s/{{PKGVER}}/${pkgver}/g" aur-package/PKGBUILD
+          sed -i "s/{{TAG}}/${tag}/g" aur-package/PKGBUILD
           sed -i "s/{{PKGREL}}/${{ steps.pkgrel.outputs.pkgrel }}/g" aur-package/PKGBUILD
           sed -i "s/{{X64_HASH}}/${{ steps.checksums.outputs.x64_hash }}/g" aur-package/PKGBUILD
           sed -i "s/{{ARM64_HASH}}/${{ steps.checksums.outputs.arm64_hash }}/g" aur-package/PKGBUILD
