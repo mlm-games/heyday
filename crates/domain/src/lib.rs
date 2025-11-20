@@ -2,8 +2,8 @@ use crossbeam_channel as chan;
 use parking_lot::Mutex;
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::SystemTime,
 };
@@ -194,11 +194,33 @@ impl Executor {
     pub fn run(self) {
         std::thread::spawn(move || {
             while let Ok(job) = self.rx_jobs.recv() {
-                let sink = self.tx_prog.clone();
+                let tx_prog = self.tx_prog.clone();
                 let tx_evt = self.tx_evt.clone();
                 let cancel = job.cancel.clone();
-                let send = |p: Progress| {
-                    let _ = sink.send(p);
+
+                // Per-job progress channel: backends write here; we inject job_id and forward.
+                let (tx_local, rx_local) = chan::unbounded::<Progress>();
+                let fwd = {
+                    let tx_prog = tx_prog.clone();
+                    let jid = job.id;
+                    std::thread::spawn(move || {
+                        for mut p in rx_local.iter() {
+                            p.job_id = jid;
+                            let _ = tx_prog.send(p);
+                        }
+                    })
+                };
+
+                // Helper for executor-originated progress messages
+                let send_direct = |stage: Stage, log: Option<String>, warning: bool| {
+                    let _ = tx_prog.send(Progress {
+                        job_id: job.id,
+                        stage,
+                        percent: None,
+                        bytes: None,
+                        log,
+                        warning,
+                    });
                 };
 
                 let repo = &self.repo;
@@ -210,18 +232,11 @@ impl Executor {
                     }
                 };
 
-                send(Progress {
-                    job_id: job.id,
-                    stage: Stage::Queued,
-                    percent: None,
-                    bytes: None,
-                    log: None,
-                    warning: false,
-                });
+                send_direct(Stage::Queued, None, false);
 
                 let run_job = || -> Result<()> {
                     match job.kind {
-                        JobKind::Refresh => pick(&job.payload).refresh(&sink, &cancel),
+                        JobKind::Refresh => pick(&job.payload).refresh(&tx_local, &cancel),
                         JobKind::Search => {
                             let q = if let JobPayload::Query(q) = &job.payload {
                                 q.trim().to_string()
@@ -240,38 +255,32 @@ impl Executor {
                             let mut items: Vec<PackageSummary> = Vec::new();
 
                             // Repo
-                            match repo.search(&q, &sink, &cancel) {
+                            match repo.search(&q, &tx_local, &cancel) {
                                 Ok(mut v) => {
                                     items.append(&mut v);
                                     any_ok = true;
                                 }
                                 Err(e) => {
-                                    let _ = sink.send(Progress {
-                                        job_id: job.id,
-                                        stage: Stage::Searching,
-                                        percent: None,
-                                        bytes: None,
-                                        log: Some(format!("repo search failed: {e}")),
-                                        warning: true,
-                                    });
+                                    send_direct(
+                                        Stage::Searching,
+                                        Some(format!("repo search failed: {e}")),
+                                        true,
+                                    );
                                 }
                             }
 
                             // AUR
-                            match aur.search(&q, &sink, &cancel) {
+                            match aur.search(&q, &tx_local, &cancel) {
                                 Ok(mut v) => {
                                     items.append(&mut v);
                                     any_ok = true;
                                 }
                                 Err(e) => {
-                                    let _ = sink.send(Progress {
-                                        job_id: job.id,
-                                        stage: Stage::Searching,
-                                        percent: None,
-                                        bytes: None,
-                                        log: Some(format!("AUR search failed: {e}")),
-                                        warning: true,
-                                    });
+                                    send_direct(
+                                        Stage::Searching,
+                                        Some(format!("AUR search failed: {e}")),
+                                        true,
+                                    );
                                 }
                             }
 
@@ -288,7 +297,7 @@ impl Executor {
                         }
                         JobKind::Details => {
                             if let JobPayload::Package(id) = &job.payload {
-                                let det = pick(&job.payload).details(id, &sink, &cancel)?;
+                                let det = pick(&job.payload).details(id, &tx_local, &cancel)?;
                                 tx_evt
                                     .send(Event::Details { item: det })
                                     .map_err(|e| Error::Internal(e.to_string()))?;
@@ -298,7 +307,7 @@ impl Executor {
                         JobKind::Install => {
                             let _g = TXN_MUTEX.lock();
                             if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).install(id, &sink, &cancel)
+                                pick(&job.payload).install(id, &tx_local, &cancel)
                             } else {
                                 Ok(())
                             }
@@ -306,7 +315,7 @@ impl Executor {
                         JobKind::Remove => {
                             let _g = TXN_MUTEX.lock();
                             if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).remove(id, &sink, &cancel)
+                                pick(&job.payload).remove(id, &tx_local, &cancel)
                             } else {
                                 Ok(())
                             }
@@ -314,30 +323,24 @@ impl Executor {
                         JobKind::Upgrades => {
                             // Collect from both repo and AUR, but don’t fail the whole job
                             let mut items: Vec<PackageSummary> = Vec::new();
-                            match repo.upgrades(&sink, &cancel) {
+                            match repo.upgrades(&tx_local, &cancel) {
                                 Ok(mut v) => items.append(&mut v),
                                 Err(e) => {
-                                    let _ = sink.send(Progress {
-                                        job_id: job.id,
-                                        stage: Stage::Verifying,
-                                        percent: None,
-                                        bytes: None,
-                                        log: Some(format!("repo upgrades failed: {e}")),
-                                        warning: true,
-                                    });
+                                    send_direct(
+                                        Stage::Verifying,
+                                        Some(format!("repo upgrades failed: {e}")),
+                                        true,
+                                    );
                                 }
                             }
-                            match aur.upgrades(&sink, &cancel) {
+                            match aur.upgrades(&tx_local, &cancel) {
                                 Ok(mut v) => items.append(&mut v),
                                 Err(e) => {
-                                    let _ = sink.send(Progress {
-                                        job_id: job.id,
-                                        stage: Stage::Verifying,
-                                        percent: None,
-                                        bytes: None,
-                                        log: Some(format!("AUR upgrades failed: {e}")),
-                                        warning: true,
-                                    });
+                                    send_direct(
+                                        Stage::Verifying,
+                                        Some(format!("AUR upgrades failed: {e}")),
+                                        true,
+                                    );
                                 }
                             }
                             // Sort A–Z for stability; UI can re-sort
@@ -350,7 +353,7 @@ impl Executor {
                         JobKind::Upgrade => {
                             let _g = TXN_MUTEX.lock();
                             if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).upgrade(id, &sink, &cancel)
+                                pick(&job.payload).upgrade(id, &tx_local, &cancel)
                             } else {
                                 Ok(())
                             }
@@ -358,7 +361,7 @@ impl Executor {
                         JobKind::UpgradeAll => {
                             let _g = TXN_MUTEX.lock();
                             // Minimal: perform repo full system upgrade; AUR can be expanded later.
-                            repo.upgrade_all(&sink, &cancel)?;
+                            repo.upgrade_all(&tx_local, &cancel)?;
                             // If you want AUR mass-upgrade later, we can iterate aur.upgrades() and call aur.upgrade(..).
                             Ok(())
                         }
@@ -366,6 +369,8 @@ impl Executor {
                 };
 
                 let res = run_job();
+                drop(tx_local);
+                let _ = fwd.join();
                 if res.is_ok() {
                     match job.kind {
                         JobKind::Install
@@ -377,18 +382,15 @@ impl Executor {
                         _ => {}
                     }
                 }
-                send(Progress {
-                    job_id: job.id,
-                    stage: if res.is_ok() {
+                send_direct(
+                    if res.is_ok() {
                         Stage::Finished
                     } else {
                         Stage::Failed
                     },
-                    percent: Some(1.0),
-                    bytes: None,
-                    log: res.as_ref().err().map(|e| e.to_string()),
-                    warning: res.is_err(),
-                });
+                    res.as_ref().err().map(|e| e.to_string()),
+                    res.is_err(),
+                );
             }
         });
     }

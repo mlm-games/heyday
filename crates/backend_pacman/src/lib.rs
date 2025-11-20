@@ -150,31 +150,74 @@ fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
 
 // ---------- parsing for -Si ----------
 fn parse_pacman_details(out: &str, mut summary: PackageSummary) -> PackageDetails {
+    fn strip_ver_token(tok: &str) -> String {
+        tok.split(|c| c == '<' || c == '>' || c == '=')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    }
+    fn parse_pkg_list(s: &str) -> Vec<String> {
+        s.split_whitespace()
+            .filter_map(|t| {
+                let n = strip_ver_token(t);
+                if n.is_empty() || n == "None" {
+                    None
+                } else {
+                    Some(n)
+                }
+            })
+            .collect()
+    }
     let mut depends = Vec::new();
     let mut opt_depends = Vec::new();
     let mut homepage = None;
     let mut size_install = None;
     let mut size_download = None;
     let mut maintainer = None;
+    let mut in_dep = false;
+    let mut in_opt = false;
 
-    for line in out.lines().map(|l| l.trim_end()) {
+    for raw in out.lines() {
+        let line = raw.trim_end();
+
         if let Some(v) = line.strip_prefix("Depends On      :") {
-            if v.trim() != "None" {
-                depends = v.split_whitespace().map(|s| s.trim().to_string()).collect();
+            in_dep = true;
+            in_opt = false;
+            let v = v.trim();
+            if v != "None" {
+                depends.extend(parse_pkg_list(v));
             }
+            continue;
         } else if let Some(v) = line.strip_prefix("Optional Deps   :") {
-            let name = v.split(':').next().unwrap_or("").trim();
-            if !name.is_empty() {
-                opt_depends.push(name.to_string());
+            in_dep = false;
+            in_opt = true;
+            let v = v.trim();
+            if !v.is_empty() {
+                if let Some(name) = v.split(':').next() {
+                    let n = name.trim();
+                    if !n.is_empty() {
+                        opt_depends.push(n.to_string());
+                    }
+                }
             }
+            continue;
         } else if let Some(v) = line.strip_prefix("URL             :") {
             homepage = Some(v.trim().to_string());
+            in_dep = false;
+            in_opt = false;
         } else if let Some(v) = line.strip_prefix("Installed Size  :") {
             size_install = Some(parse_size(v.trim()));
+            in_dep = false;
+            in_opt = false;
         } else if let Some(v) = line.strip_prefix("Download Size   :") {
             size_download = Some(parse_size(v.trim()));
+            in_dep = false;
+            in_opt = false;
         } else if let Some(v) = line.strip_prefix("Packager        :") {
             maintainer = Some(v.trim().to_string());
+            in_dep = false;
+            in_opt = false;
         } else if let Some(v) = line.strip_prefix("Description     :") {
             if summary.description.is_empty() {
                 summary.description = v.trim().to_string();
@@ -183,6 +226,23 @@ fn parse_pacman_details(out: &str, mut summary: PackageSummary) -> PackageDetail
             if summary.version.is_empty() {
                 summary.version = v.trim().to_string();
             }
+        } else if line.starts_with(char::is_whitespace) {
+            // Continuations for previous key
+            let v = line.trim();
+            if in_dep && !v.is_empty() {
+                depends.extend(parse_pkg_list(v));
+            } else if in_opt && !v.is_empty() {
+                if let Some(name) = v.split(':').next() {
+                    let n = name.trim();
+                    if !n.is_empty() {
+                        opt_depends.push(n.to_string());
+                    }
+                }
+            }
+        } else {
+            // New field
+            in_dep = false;
+            in_opt = false;
         }
     }
 
