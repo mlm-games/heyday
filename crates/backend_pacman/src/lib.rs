@@ -4,6 +4,7 @@ use std::{
     collections::HashSet,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
+    sync::{Arc, Mutex},
 };
 
 pub struct PacmanCli;
@@ -291,7 +292,7 @@ impl PacmanCli {
         sink: &ProgressSink,
         cancel: &CancelToken,
         stage: Stage,
-    ) -> Result<i32> {
+    ) -> Result<(i32, Option<String>)> {
         let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -306,6 +307,9 @@ impl PacmanCli {
 
         let stage_out = stage.clone();
         let stage_err = stage;
+
+        let last_err = Arc::new(Mutex::new(None::<String>));
+        let last_err_t2 = last_err.clone();
 
         let t1 = std::thread::spawn(move || {
             for l in BufReader::new(out).lines().flatten() {
@@ -322,6 +326,10 @@ impl PacmanCli {
 
         let t2 = std::thread::spawn(move || {
             for l in BufReader::new(err).lines().flatten() {
+                {
+                    let mut g = last_err_t2.lock().unwrap();
+                    *g = Some(l.clone());
+                }
                 let _ = tx2.send(Progress {
                     job_id: jid,
                     stage: stage_err.clone(),
@@ -338,7 +346,9 @@ impl PacmanCli {
                 Ok(Some(status)) => {
                     let _ = t1.join();
                     let _ = t2.join();
-                    return Ok(status.code().unwrap_or(-1));
+                    let code = status.code().unwrap_or(-1);
+                    let last = last_err.lock().unwrap().clone();
+                    return Ok((code, last));
                 }
                 Ok(None) => {
                     if cancel.is_cancelled() {
@@ -364,13 +374,43 @@ impl PacmanCli {
 
 impl PackageBackend for PacmanCli {
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let mut cmd = Command::new("pacman");
-        cmd.args(["-Sy", "--noconfirm"]);
-        let code = self.run_stream(cmd, sink, cancel, Stage::Refreshing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            Err(Error::Alpm(format!("pacman -Sy exit {code}")))
+        let try_pkexec = || -> Result<()> {
+            let mut cmd = Command::new("pkexec");
+            cmd.args(["pacman", "-Sy", "--noconfirm"]);
+            let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Refreshing)?;
+            if code == 0 {
+                Ok(())
+            } else {
+                let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+                Err(Error::Alpm(format!("pacman -Sy exit {code}{why}")))
+            }
+        };
+
+        match try_pkexec() {
+            Ok(()) => Ok(()),
+            Err(Error::Internal(e)) if e.contains("spawn:") => {
+                // pkexec missing or cannot spawn. Explain and try unprivileged -Sy (may still fail).
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Refreshing,
+                    percent: None,
+                    bytes: None,
+                    log: Some(
+                        "pkexec unavailable; attempting unprivileged refresh (may fail)".into(),
+                    ),
+                    warning: true,
+                });
+                let mut cmd = Command::new("pacman");
+                cmd.args(["-Sy", "--noconfirm"]);
+                let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Refreshing)?;
+                if code == 0 {
+                    Ok(())
+                } else {
+                    let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+                    Err(Error::Alpm(format!("pacman -Sy exit {code}{why}")))
+                }
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -507,22 +547,24 @@ impl PackageBackend for PacmanCli {
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let mut cmd = Command::new("pkexec");
         cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
-        let code = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
+        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
         if code == 0 {
             Ok(())
         } else {
-            Err(Error::Priv(format!("install exit {code}")))
+            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+            Err(Error::Priv(format!("install exit {code}{why}")))
         }
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let mut cmd = Command::new("pkexec");
         cmd.args(["pacman", "-Rns", "--noconfirm", &id.name]);
-        let code = self.run_stream(cmd, sink, cancel, Stage::Removing)?;
+        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Removing)?;
         if code == 0 {
             Ok(())
         } else {
-            Err(Error::Priv(format!("remove exit {code}")))
+            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+            Err(Error::Priv(format!("remove exit {code}{why}")))
         }
     }
 
@@ -558,11 +600,12 @@ impl PackageBackend for PacmanCli {
         // Upgrades a single repo package to the latest available version.
         let mut cmd = Command::new("pkexec");
         cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
-        let code = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
+        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
         if code == 0 {
             Ok(())
         } else {
-            Err(Error::Priv(format!("upgrade exit {code}")))
+            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+            Err(Error::Priv(format!("upgrade exit {code}{why}")))
         }
     }
 
@@ -570,11 +613,12 @@ impl PackageBackend for PacmanCli {
         // Full system upgrade, as pacman documents (-Syu).
         let mut cmd = Command::new("pkexec");
         cmd.args(["pacman", "-Syu", "--noconfirm"]);
-        let code = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
+        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
         if code == 0 {
             Ok(())
         } else {
-            Err(Error::Priv(format!("upgrade-all exit {code}")))
+            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+            Err(Error::Priv(format!("upgrade-all exit {code}{why}")))
         }
     }
 }
