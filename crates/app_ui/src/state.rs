@@ -36,6 +36,7 @@ pub struct AppState {
 pub enum Action {
     SetQuery(String),
     Search,
+    Refresh,
     Upgrades,
     UpgradeAll,
     Upgrade(PackageId),
@@ -98,6 +99,36 @@ impl Store {
                     s.selected = None;
                 }
             }
+            Action::Refresh => {
+                let id = self.jid();
+                let _ = self.tx_jobs.send(Job {
+                    id,
+                    kind: JobKind::Refresh,
+                    payload: JobPayload::None,
+                    created_at: std::time::SystemTime::now(),
+                    cancel: CancelToken::new(),
+                });
+                if s.in_upgrades_view {
+                    let id = self.jid();
+                    let _ = self.tx_jobs.send(Job {
+                        id,
+                        kind: JobKind::Upgrades,
+                        payload: JobPayload::None,
+                        created_at: std::time::SystemTime::now(),
+                        cancel: CancelToken::new(),
+                    });
+                } else if !s.query.trim().is_empty() {
+                    let id = self.jid();
+                    let q = s.query.clone();
+                    let _ = self.tx_jobs.send(Job {
+                        id,
+                        kind: JobKind::Search,
+                        payload: JobPayload::Query(q),
+                        created_at: std::time::SystemTime::now(),
+                        cancel: CancelToken::new(),
+                    });
+                }
+            }
             Action::Upgrades => {
                 s.in_upgrades_view = true;
                 let id = self.jid();
@@ -150,17 +181,31 @@ impl Store {
                     cancel: CancelToken::new(),
                 });
             }
-            Action::Progress(p) => {
-                if let Some(mut l) = p.log {
+            Action::Progress(mut p) => {
+                if let Some(ref mut l) = p.log {
                     l.push('\n');
                     s.progress_log.push_str(&l);
                     if s.progress_log.len() > MAX_LOG {
-                        let cut = s.progress_log.len() - MAX_LOG;
-                        s.progress_log.drain(..cut);
+                        // Drain on a UTF-8 boundary to avoid panic.
+                        let excess = s.progress_log.len() - MAX_LOG;
+                        let mut drain_to = excess;
+                        while drain_to < s.progress_log.len()
+                            && !s.progress_log.is_char_boundary(drain_to)
+                        {
+                            drain_to += 1;
+                        }
+                        s.progress_log.drain(..drain_to.min(s.progress_log.len()));
                     }
                 }
                 if matches!(p.stage, Stage::Failed) && s.error.is_none() {
-                    s.error = Some("operation failed".into());
+                    s.error = p
+                        .log
+                        .clone()
+                        .and_then(|t| {
+                            let t = t.trim().to_string();
+                            if t.is_empty() { None } else { Some(t) }
+                        })
+                        .or_else(|| Some("operation failed".into()));
                 }
             }
             Action::Event(e) => match e {

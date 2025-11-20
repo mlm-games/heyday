@@ -1,6 +1,7 @@
 use domain::*;
 use regex::Regex;
 use std::{
+    collections::HashSet,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
 };
@@ -9,6 +10,20 @@ pub struct PacmanCli;
 impl PacmanCli {
     pub fn new() -> Self {
         Self
+    }
+
+    fn installed_set() -> HashSet<String> {
+        let out = Command::new("pacman").args(["-Qq"]).output().ok();
+        let mut set = HashSet::new();
+        if let Some(out) = out {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let n = line.trim();
+                if !n.is_empty() {
+                    set.insert(n.to_string());
+                }
+            }
+        }
+        set
     }
 
     fn parse_upgrades(out: &str) -> Vec<PackageSummary> {
@@ -32,6 +47,7 @@ impl PacmanCli {
     }
 
     fn search_fallback_names(&self, q: &str, sink: &ProgressSink) -> Result<Vec<PackageSummary>> {
+        let installed = Self::installed_set();
         let out = match std::process::Command::new("pacman")
             .args(["-Ssq", q])
             .output()
@@ -79,7 +95,7 @@ impl PacmanCli {
                 },
                 version: String::new(),
                 description: String::new(),
-                installed: false,
+                installed: installed.contains(name),
                 popular: None,
                 last_updated: None,
             })
@@ -111,7 +127,7 @@ impl PacmanCli {
     }
 }
 
-// ---------- parsing for -Ss ----------
+/// parsing for -Ss
 fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
     let re_head =
         Regex::new(r"^(?P<repo>\S+)/(?P<name>\S+)\s+(?P<ver>\S+)(?:\s+\[installed.*\])?\s*$")
@@ -148,7 +164,7 @@ fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
     res
 }
 
-// ---------- parsing for -Si ----------
+/// parsing for -Si
 fn parse_pacman_details(out: &str, mut summary: PackageSummary) -> PackageDetails {
     fn strip_ver_token(tok: &str) -> String {
         tok.split(|c| c == '<' || c == '>' || c == '=')

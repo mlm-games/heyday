@@ -6,8 +6,9 @@ use std::{
     io::Write,
     path::PathBuf,
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use ureq::config::Config;
 
 #[derive(Deserialize)]
 struct AurResponse<T> {
@@ -15,7 +16,7 @@ struct AurResponse<T> {
 }
 
 #[derive(Deserialize)]
-struct AurPkg {
+pub struct AurPkg {
     #[serde(rename = "Name")]
     name: String,
     #[serde(rename = "Version")]
@@ -28,6 +29,12 @@ struct AurPkg {
     maintainer: Option<String>,
     #[serde(rename = "LastModified")]
     last_modified: Option<u64>,
+    #[serde(rename = "URL")]
+    url: Option<String>,
+    #[serde(rename = "Depends")]
+    depends: Option<Vec<String>>,
+    #[serde(rename = "OptDepends")]
+    optdepends: Option<Vec<String>>,
 }
 
 pub struct AurBackend;
@@ -35,6 +42,14 @@ impl AurBackend {
     pub fn new() -> Self {
         Self
     }
+}
+
+pub fn http() -> ureq::Agent {
+    ureq::Agent::new_with_config(
+        Config::builder()
+            .timeout_global(Some(Duration::from_secs(7)))
+            .build(),
+    )
 }
 
 fn ts(opt: Option<u64>) -> Option<SystemTime> {
@@ -130,7 +145,8 @@ impl PackageBackend for AurBackend {
             "https://aur.archlinux.org/rpc/?v=5&type=search&by=name-desc&arg={}",
             urlencoding::encode(q)
         );
-        let mut resp = ureq::get(&url)
+        let mut resp = http()
+            .get(&url)
             .call()
             .map_err(|e| Error::Network(e.to_string()))?;
         let resp: AurResponse<AurPkg> = resp
@@ -193,11 +209,18 @@ impl PackageBackend for AurBackend {
             popular: p.votes,
             last_updated: ts(p.last_modified),
         };
+        let opt_names = p
+            .optdepends
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|s| s.split(':').next().map(|n| n.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
         Ok(PackageDetails {
             summary,
-            depends: vec![],
-            opt_depends: vec![],
-            homepage: None,
+            depends: p.depends.unwrap_or_default(),
+            opt_depends: opt_names,
+            homepage: p.url,
             maintainer: p.maintainer,
             size_install: None,
             size_download: None,

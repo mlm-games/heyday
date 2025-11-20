@@ -190,6 +190,26 @@ pub fn root_view(store: Rc<Store>) -> View {
             .fill_max_size()
             .background(Color::from_hex("#0F1012")),
         Column(Modifier::new().padding(12.0)).child((
+            //Error banner
+            if let Some(err) = s.error.clone() {
+                Row(Modifier::new()
+                    .padding(8.0)
+                    .background(Color::from_hex("#3B1F1F"))
+                    .border(1.0, Color::from_hex("#7F1D1D"), 8.0)
+                    .clip_rounded(8.0))
+                .child((
+                    Text("⚠ ").color(Color::from_hex("#FCA5A5")).size(16.0),
+                    Text(err)
+                        .color(Color::from_hex("#FCA5A5"))
+                        .modifier(Modifier::new().flex_grow(1.0).padding(4.0)),
+                    Button("Dismiss", {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ClearError)
+                    }),
+                ))
+            } else {
+                Box(Modifier::new())
+            },
             // Header bar
             Row(Modifier::new().padding(8.0)).child((
                 Text("soredowe")
@@ -207,7 +227,7 @@ pub fn root_view(store: Rc<Store>) -> View {
                 },
                 Button("🔃 Refresh", {
                     let store = store.clone();
-                    move || store.dispatch(Action::Search)
+                    move || store.dispatch(Action::Refresh)
                 })
                 .modifier(Modifier::new().padding(4.0)),
                 Button("Upgrades", {
