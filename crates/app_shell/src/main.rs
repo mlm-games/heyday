@@ -18,6 +18,7 @@ use app_ui::{
 use backend_aur::AurBackend;
 use backend_pacman::PacmanCli;
 use domain::{Executor, PackageBackend};
+use log::{error, warn};
 use repose_platform::run_desktop_app;
 
 fn main() -> anyhow::Result<()> {
@@ -106,7 +107,10 @@ fn main() -> anyhow::Result<()> {
                 .expect("watcher");
 
             // Watch the local DB (recursive to see renames and file-level events as needed)
-            let _ = watcher.watch(Path::new(LOCAL_DB), RecursiveMode::Recursive);
+            if let Err(e) = watcher.watch(Path::new(LOCAL_DB), RecursiveMode::Recursive) {
+                error!("package DB watcher failed to start: {e}");
+                return;
+            }
             // Keep thread alive.
             loop {
                 sleep(Duration::from_secs(3600));

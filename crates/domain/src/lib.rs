@@ -172,6 +172,7 @@ pub struct Executor {
     tx_prog: chan::Sender<Progress>,
     tx_evt: chan::Sender<Event>,
     rx_jobs: chan::Receiver<Job>,
+    active_search_id: parking_lot::Mutex<Option<u64>>,
 }
 
 impl Executor {
@@ -188,6 +189,7 @@ impl Executor {
             tx_prog,
             tx_evt,
             rx_jobs,
+            active_search_id: parking_lot::Mutex::new(None),
         }
     }
 
@@ -238,6 +240,10 @@ impl Executor {
                     match job.kind {
                         JobKind::Refresh => pick(&job.payload).refresh(&tx_local, &cancel),
                         JobKind::Search => {
+                            {
+                                let mut g = self.active_search_id.lock();
+                                *g = Some(job.id);
+                            }
                             let q = if let JobPayload::Query(q) = &job.payload {
                                 q.trim().to_string()
                             } else {
@@ -290,9 +296,15 @@ impl Executor {
                             }
 
                             items.sort_by(|a, b| a.id.name.cmp(&b.id.name));
-                            tx_evt
-                                .send(Event::SearchResults { query: q, items })
-                                .map_err(|e| Error::Internal(e.to_string()))?;
+                            let is_latest = {
+                                let g = self.active_search_id.lock();
+                                g.as_ref().copied() == Some(job.id)
+                            };
+                            if is_latest {
+                                tx_evt
+                                    .send(Event::SearchResults { query: q, items })
+                                    .map_err(|e| Error::Internal(e.to_string()))?;
+                            }
                             Ok(())
                         }
                         JobKind::Details => {

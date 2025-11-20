@@ -15,3 +15,4 @@ backend_pacman = { path = "../backend_pacman" }
 backend_aur = { path = "../backend_aur" }
 app_ui = { path = "../app_ui" }
 notify.workspace = true
+log.workspace = true

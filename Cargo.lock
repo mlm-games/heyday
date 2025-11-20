@@ -149,6 +149,7 @@ dependencies = [
  "crossbeam-channel",
  "domain",
  "env_logger",
+ "log",
  "notify",
  "repose-core",
  "repose-platform",
