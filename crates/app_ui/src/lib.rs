@@ -5,7 +5,7 @@ use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
     *,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 pub mod state;
 
@@ -24,7 +24,7 @@ fn badge(text: &str, bg: Color) -> View {
 
 // Filter chip
 fn chip(label: &str, on: bool, on_toggle: impl Fn() + 'static) -> View {
-    Button(label, on_toggle).modifier(
+    Button(Text(label), on_toggle).modifier(
         Modifier::new()
             .padding(4.0)
             .background(if on {
@@ -86,17 +86,19 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
                 .modifier(Modifier::new().padding(2.0).flex_grow(1.0).max_width(500.0)),
         )),
         if upgrades_mode {
-            Button("Upgrade", {
+            Button(Text("Upgrade"), {
                 let store = store.clone();
                 let id = pkg.id.clone();
                 move || store.dispatch(Action::Upgrade(id.clone()))
             })
         } else {
-            Button(if pkg.installed { "Remove" } else { "Install" }, {
+            let label = if pkg.installed { "Remove" } else { "Install" };
+            Button(Text(label), {
                 let store = store.clone();
                 let id = pkg.id.clone();
+                let installed = pkg.installed;
                 move || {
-                    if pkg.installed {
+                    if installed {
                         store.dispatch(Action::Remove(id.clone()))
                     } else {
                         store.dispatch(Action::Install(id.clone()))
@@ -111,7 +113,6 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
 fn details_card(store: Rc<Store>) -> View {
     let s = store.state.get();
     let results = s.results.clone();
-    let selected = s.selected.clone();
     let Some(id) = &s.selected else {
         return Column(Modifier::new().padding(16.0))
             .child(Text("Select a package to see details").color(Color::from_hex("#AAAAAA")));
@@ -148,17 +149,19 @@ fn details_card(store: Rc<Store>) -> View {
             Row(Modifier::new().padding(8.0)).child((
                 Spacer(),
                 if s.in_upgrades_view {
-                    Button("Upgrade", {
+                    Button(Text("Upgrade"), {
                         let store = store.clone();
                         let id = pkg.id.clone();
                         move || store.dispatch(Action::Upgrade(id.clone()))
                     })
                 } else {
-                    Button(if pkg.installed { "Remove" } else { "Install" }, {
+                    let label = if pkg.installed { "Remove" } else { "Install" };
+                    Button(Text(label), {
                         let store = store.clone();
                         let id = pkg.id.clone();
+                        let installed = pkg.installed;
                         move || {
-                            if pkg.installed {
+                            if installed {
                                 store.dispatch(Action::Remove(id.clone()))
                             } else {
                                 store.dispatch(Action::Install(id.clone()))
@@ -167,7 +170,7 @@ fn details_card(store: Rc<Store>) -> View {
                     })
                 },
                 Spacer(),
-                Button("Clear selection", {
+                Button(Text("Clear selection"), {
                     let store = store.clone();
                     move || store.dispatch(Action::ClearSelection)
                 }),
@@ -183,14 +186,14 @@ fn details_card(store: Rc<Store>) -> View {
 pub fn root_view(store: Rc<Store>) -> View {
     let s = store.state.get();
 
-    let current_query = s.query.clone();
+    let _current_query = s.query.clone();
 
     Surface(
         Modifier::new()
             .fill_max_size()
             .background(Color::from_hex("#0F1012")),
         Column(Modifier::new().padding(12.0)).child((
-            //Error banner
+            // Error banner
             if let Some(err) = s.error.clone() {
                 Row(Modifier::new()
                     .padding(8.0)
@@ -202,7 +205,7 @@ pub fn root_view(store: Rc<Store>) -> View {
                     Text(err)
                         .color(Color::from_hex("#FCA5A5"))
                         .modifier(Modifier::new().flex_grow(1.0).padding(4.0)),
-                    Button("Dismiss", {
+                    Button(Text("Dismiss"), {
                         let store = store.clone();
                         move || store.dispatch(Action::ClearError)
                     }),
@@ -217,7 +220,7 @@ pub fn root_view(store: Rc<Store>) -> View {
                     .modifier(Modifier::new().padding(8.0)),
                 Spacer(),
                 if s.in_upgrades_view && !s.results.is_empty() {
-                    Button("Upgrade all", {
+                    Button(Text("Upgrade all"), {
                         let store = store.clone();
                         move || store.dispatch(Action::UpgradeAll)
                     })
@@ -225,12 +228,12 @@ pub fn root_view(store: Rc<Store>) -> View {
                 } else {
                     Box(Modifier::new())
                 },
-                Button("🔃 Refresh", {
+                Button(Text("🔃 Refresh"), {
                     let store = store.clone();
                     move || store.dispatch(Action::Refresh)
                 })
                 .modifier(Modifier::new().padding(4.0)),
-                Button("Upgrades", {
+                Button(Text("Upgrades"), {
                     let store = store.clone();
                     move || store.dispatch(Action::Upgrades)
                 })
@@ -246,7 +249,12 @@ pub fn root_view(store: Rc<Store>) -> View {
                         .background(Color::from_hex("#171717"))
                         .border(1.0, Color::from_hex("#3A3A3A"), 6.0)
                         .clip_rounded(6.0)
-                        .semantics("Search field"),
+                        .semantics(Semantics {
+                            role: Role::TextField,
+                            label: Some("Search field".into()),
+                            focused: false,
+                            enabled: true,
+                        }),
                     Some({
                         let store = store.clone();
                         move |text: String| {
@@ -264,15 +272,13 @@ pub fn root_view(store: Rc<Store>) -> View {
                     }),
                 ),
                 // Search button - uses query from store
-                Button("Search", {
+                Button(Text("Search"), {
                     let store = store.clone();
                     move || {
                         store.dispatch(Action::Search);
                     }
                 })
                 .modifier(Modifier::new().padding(4.0)),
-                // Debug
-                // Text(format!("Query: '{}'", current_query)).modifier(Modifier::new().padding(4.0)),
                 // Filters
                 chip("Repo", s.filter_repo, {
                     let store = store.clone();
@@ -289,15 +295,15 @@ pub fn root_view(store: Rc<Store>) -> View {
                 Spacer(),
                 // Sort
                 Row(Modifier::new().padding(6.0)).child((
-                    Button("A–Z", {
+                    Button(Text("A–Z"), {
                         let store = store.clone();
                         move || store.dispatch(Action::SetSort(SortMode::NameAsc))
                     }),
-                    Button("Z–A", {
+                    Button(Text("Z–A"), {
                         let store = store.clone();
                         move || store.dispatch(Action::SetSort(SortMode::NameDesc))
                     }),
-                    Button("Popular", {
+                    Button(Text("Popular"), {
                         let store = store.clone();
                         move || store.dispatch(Action::SetSort(SortMode::Popularity))
                     }),
@@ -343,6 +349,8 @@ pub fn root_view(store: Rc<Store>) -> View {
                         Column(Modifier::new().grid_span(right_span, 1))
                             .child(details_card(store.clone())),
                     ],
+                    6.0,
+                    6.0,
                 )
             },
             // Footer / status
@@ -356,11 +364,11 @@ pub fn root_view(store: Rc<Store>) -> View {
                 .modifier(Modifier::new().padding(4.0)),
                 Spacer(),
                 Button(
-                    if s.log_expanded {
+                    Text(if s.log_expanded {
                         "Hide log"
                     } else {
                         "Show log"
-                    },
+                    }),
                     {
                         let store = store.clone();
                         move || store.dispatch(Action::ToggleLog)
@@ -371,8 +379,7 @@ pub fn root_view(store: Rc<Store>) -> View {
                 Box(Modifier::new()
                     .fill_max_size()
                     .size(0.0, 180.0)
-                    .background(Color::TRANSPARENT) //Color::from_hex("#101010"))
-                    // .border(1.0, Color::from_hex("#2A2A2A"), 6.0)
+                    .background(Color::TRANSPARENT)
                     .clip_rounded(6.0))
                 .child(
                     Text(s.progress_log.clone())
