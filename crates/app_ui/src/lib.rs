@@ -82,8 +82,8 @@ fn styled_button(label: &str, on_click: impl Fn() + 'static) -> View {
     Button(Text(label).size(14.0), on_click).modifier(
         Modifier::new()
             .padding_values(PaddingValues {
-                left: 20.0,
-                right: 20.0,
+                left: 24.0,
+                right: 24.0,
                 top: 10.0,
                 bottom: 10.0,
             })
@@ -106,8 +106,8 @@ fn secondary_button(label: &str, on_click: impl Fn() + 'static) -> View {
     .modifier(
         Modifier::new()
             .padding_values(PaddingValues {
-                left: 20.0,
-                right: 20.0,
+                left: 24.0,
+                right: 24.0,
                 top: 10.0,
                 bottom: 10.0,
             })
@@ -437,7 +437,7 @@ pub fn root_view(store: Rc<Store>) -> View {
                 Text("Package Manager")
                     .size(14.0)
                     .color(Color::from_hex("#6B7280"))
-                    .modifier(Modifier::new().padding(12.0)),
+                    .modifier(Modifier::new().padding(12.0).align_self_center()),
                 Spacer(),
                 if s.in_upgrades_view && !s.results.is_empty() {
                     success_button("⬆ Upgrade All", {
