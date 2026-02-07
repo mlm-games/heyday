@@ -1,7 +1,7 @@
 use crossbeam_channel as chan;
 use notify::{
-    EventKind, RecursiveMode, Watcher,
     event::{CreateKind, ModifyKind, RemoveKind},
+    EventKind, RecursiveMode, Watcher,
 };
 use std::{
     path::Path,
@@ -18,7 +18,7 @@ use app_ui::{
 use backend_aur::AurBackend;
 use backend_pacman::PacmanCli;
 use domain::{Executor, PackageBackend};
-use log::{error, warn};
+use log::error;
 use repose_platform::run_desktop_app;
 
 fn main() -> anyhow::Result<()> {
@@ -118,7 +118,7 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    run_desktop_app(move |_sched| {
+    run_desktop_app(move |_sched, _ctx| {
         while let Ok(p) = rx_prog.try_recv() {
             store.dispatch(Action::Progress(p));
         }

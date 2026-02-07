@@ -8,6 +8,11 @@ use std::{
 };
 
 pub struct PacmanCli;
+impl Default for PacmanCli {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl PacmanCli {
     pub fn new() -> Self {
         Self

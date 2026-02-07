@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-repose-platform = { version = "0.10.0", features = ["desktop"] }
-repose-ui = "0.10.0"
-repose-core = "0.10.0"
+repose-platform.workspace = true
+repose-ui.workspace = true
+repose-core.workspace = true
 crossbeam-channel.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true

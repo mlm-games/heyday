@@ -8,7 +8,7 @@ use std::{
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use ureq::{config::Config, http::Request};
+use ureq::config::Config;
 
 #[derive(Deserialize)]
 struct AurResponse<T> {

@@ -9,7 +9,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [workspace.dependencies]
@@ -18,14 +18,17 @@ thiserror = "2"
 parking_lot = "0.12"
 anyhow = "1"
 env_logger = "0.11"
-regex = "1.12.2"
-nix = { version = "0.30.1", default-features = false, features = ["signal"] }
+regex = "1.12"
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 urlencoding = "2"
 tempfile = "3"
 notify = "8"
 log = "0.4"
+repose-ui = "0.13.0"
+repose-core = "0.13.0"
+repose-platform = { version = "0.13.0", features = ["desktop"] }
 
 
 [profile.release]

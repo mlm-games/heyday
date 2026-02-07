@@ -2,8 +2,8 @@ use crossbeam_channel as chan;
 use parking_lot::Mutex;
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::SystemTime,
 };
@@ -102,6 +102,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub struct CancelToken(Arc<AtomicBool>);
+impl Default for CancelToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl CancelToken {
     pub fn new() -> Self {
         Self(Arc::new(AtomicBool::new(false)))

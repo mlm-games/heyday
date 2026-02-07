@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-repose-ui = "0.10.0"
-repose-core = "0.10.0"
+repose-ui.workspace = true
+repose-core.workspace = true
 domain = { path = "../domain" }
 crossbeam-channel.workspace = true
