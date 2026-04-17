@@ -26,9 +26,9 @@ urlencoding = "2"
 tempfile = "3"
 notify = "8"
 log = "0.4"
-repose-ui = "0.13.0"
-repose-core = "0.13.0"
-repose-platform = { version = "0.13.0", features = ["desktop"] }
+repose-ui = "0.13"
+repose-core = "0.13"
+repose-platform = { version = "0.13", features = ["desktop"] }
 
 
 [profile.release]
