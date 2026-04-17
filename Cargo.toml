@@ -26,9 +26,9 @@ urlencoding = "2"
 tempfile = "3"
 notify = "8"
 log = "0.4"
-repose-ui = "0.13"
-repose-core = "0.13"
-repose-platform = { version = "0.13", features = ["desktop"] }
+repose-ui = "0.13.3"
+repose-core = "0.13.3"
+repose-platform = { version = "0.13.3", features = ["desktop"] }
 
 
 [profile.release]
@@ -36,3 +36,8 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# [patch.crates-io]
+# repose-core = { path = "../repose/crates/repose-core" }
+# repose-ui = { path = "../repose/crates/repose-ui" }
+# repose-platform = { path = "../repose/crates/repose-platform" }

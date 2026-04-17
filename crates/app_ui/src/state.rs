@@ -32,6 +32,52 @@ pub struct AppState {
     pub in_upgrades_view: bool,
 }
 
+impl AppState {
+    pub fn filter_and_sort(&self, items: Vec<PackageSummary>) -> Vec<PackageSummary> {
+        let mut v: Vec<PackageSummary> = items
+            .into_iter()
+            .filter(|x| {
+                (self.filter_repo && x.id.source == Source::Repo)
+                    || (self.filter_aur && x.id.source == Source::Aur)
+            })
+            .filter(|x| !self.filter_installed || x.installed)
+            .collect();
+
+        match self.sort {
+            SortMode::NameAsc => v.sort_by(|a, b| a.id.name.cmp(&b.id.name)),
+            SortMode::NameDesc => v.sort_by(|a, b| b.id.name.cmp(&a.id.name)),
+            SortMode::Popularity => {
+                v.sort_by(|a, b| b.popular.unwrap_or(0).cmp(&a.popular.unwrap_or(0)))
+            }
+        }
+        v
+    }
+
+    pub fn append_log(&mut self, line: &str) {
+        self.progress_log.push_str(line);
+        self.progress_log.push('\n');
+        if self.progress_log.len() > MAX_LOG {
+            let excess = self.progress_log.len() - MAX_LOG;
+            let mut drain_to = excess;
+            while drain_to < self.progress_log.len()
+                && !self.progress_log.is_char_boundary(drain_to)
+            {
+                drain_to += 1;
+            }
+            self.progress_log
+                .drain(..drain_to.min(self.progress_log.len()));
+        }
+    }
+
+    pub fn prune_selection(&mut self) {
+        if let Some(sel) = &self.selected {
+            if !self.results.iter().any(|r| r.id == *sel) {
+                self.selected = None;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Action {
     SetQuery(String),
@@ -56,146 +102,100 @@ pub enum Action {
 
 pub struct Store {
     pub state: repose_core::signal::Signal<AppState>,
-    pub tx_jobs: chan::Sender<domain::Job>,
+    tx_jobs: chan::Sender<domain::Job>,
     next_id: std::sync::atomic::AtomicU64,
 }
+
 impl Store {
     pub fn new(tx_jobs: chan::Sender<domain::Job>) -> Self {
-        let mut s = AppState::default();
-        s.filter_repo = true;
-        s.filter_aur = true;
-        s.sort = SortMode::default();
+        let s = AppState {
+            filter_repo: true,
+            filter_aur: true,
+            sort: SortMode::default(),
+            ..Default::default()
+        };
         Self {
             state: signal(s),
             tx_jobs,
             next_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
+
     fn jid(&self) -> u64 {
         self.next_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn send_job(&self, kind: JobKind, payload: JobPayload) {
+        let _ = self.tx_jobs.send(Job {
+            id: self.jid(),
+            kind,
+            payload,
+            created_at: std::time::SystemTime::now(),
+            cancel: CancelToken::new(),
+        });
+    }
+
+    fn send_search(&self, q: &str) {
+        self.send_job(JobKind::Search, JobPayload::Query(q.to_string()));
+    }
+
+    fn send_upgrades(&self) {
+        self.send_job(JobKind::Upgrades, JobPayload::None);
+    }
+
+    fn refresh_current_view(&self, s: &AppState) {
+        if s.in_upgrades_view {
+            self.send_upgrades();
+        } else if !s.query.trim().is_empty() {
+            self.send_search(&s.query);
+        }
     }
 
     pub fn dispatch(&self, a: Action) {
         let mut s = self.state.get();
         match a {
             Action::SetQuery(q) => s.query = q,
+
             Action::Search => {
                 s.in_upgrades_view = false;
                 let q = s.query.trim().to_string();
-
-                let id = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id,
-                    kind: JobKind::Search,
-                    payload: JobPayload::Query(q.clone()),
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
-
-                // Clear previous results if query is empty
+                self.send_search(&q);
                 if q.is_empty() {
                     s.results.clear();
                     s.selected = None;
                 }
             }
+
             Action::Refresh => {
-                let id = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id,
-                    kind: JobKind::Refresh,
-                    payload: JobPayload::None,
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
-                if s.in_upgrades_view {
-                    let id = self.jid();
-                    let _ = self.tx_jobs.send(Job {
-                        id,
-                        kind: JobKind::Upgrades,
-                        payload: JobPayload::None,
-                        created_at: std::time::SystemTime::now(),
-                        cancel: CancelToken::new(),
-                    });
-                } else if !s.query.trim().is_empty() {
-                    let id = self.jid();
-                    let q = s.query.clone();
-                    let _ = self.tx_jobs.send(Job {
-                        id,
-                        kind: JobKind::Search,
-                        payload: JobPayload::Query(q),
-                        created_at: std::time::SystemTime::now(),
-                        cancel: CancelToken::new(),
-                    });
-                }
+                self.send_job(JobKind::Refresh, JobPayload::None);
+                self.refresh_current_view(&s);
             }
+
             Action::Upgrades => {
                 s.in_upgrades_view = true;
-                let id = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id,
-                    kind: JobKind::Upgrades,
-                    payload: JobPayload::None,
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
+                self.send_upgrades();
             }
+
             Action::UpgradeAll => {
-                let id = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id,
-                    kind: JobKind::UpgradeAll,
-                    payload: JobPayload::None,
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
+                self.send_job(JobKind::UpgradeAll, JobPayload::None);
             }
+
             Action::Upgrade(id) => {
-                let jid = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id: jid,
-                    kind: JobKind::Upgrade,
-                    payload: JobPayload::Package(id),
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
+                self.send_job(JobKind::Upgrade, JobPayload::Package(id));
             }
 
             Action::Install(id) => {
-                let jid = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id: jid,
-                    kind: JobKind::Install,
-                    payload: JobPayload::Package(id),
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
+                self.send_job(JobKind::Install, JobPayload::Package(id));
             }
+
             Action::Remove(id) => {
-                let jid = self.jid();
-                let _ = self.tx_jobs.send(Job {
-                    id: jid,
-                    kind: JobKind::Remove,
-                    payload: JobPayload::Package(id),
-                    created_at: std::time::SystemTime::now(),
-                    cancel: CancelToken::new(),
-                });
+                self.send_job(JobKind::Remove, JobPayload::Package(id));
             }
+
             Action::Progress(mut p) => {
-                if let Some(ref mut l) = p.log {
-                    l.push('\n');
-                    s.progress_log.push_str(&l);
-                    if s.progress_log.len() > MAX_LOG {
-                        // Drain on a UTF-8 boundary to avoid panic.
-                        let excess = s.progress_log.len() - MAX_LOG;
-                        let mut drain_to = excess;
-                        while drain_to < s.progress_log.len()
-                            && !s.progress_log.is_char_boundary(drain_to)
-                        {
-                            drain_to += 1;
-                        }
-                        s.progress_log.drain(..drain_to.min(s.progress_log.len()));
-                    }
+                if let Some(l) = p.log.take() {
+                    s.append_log(&l);
                 }
                 if matches!(p.stage, Stage::Failed) && s.error.is_none() {
                     s.error = p
@@ -208,101 +208,33 @@ impl Store {
                         .or_else(|| Some("operation failed".into()));
                 }
             }
+
             Action::Event(e) => match e {
                 Event::SearchResults { items, .. } => {
                     s.in_upgrades_view = false;
                     let q = s.query.to_lowercase();
-                    let mut v = items
+                    let filtered = items
                         .into_iter()
                         .filter(|x| {
-                            if q.is_empty() {
-                                true
-                            } else {
-                                let name = x.id.name.to_lowercase();
-                                let desc = x.description.to_lowercase();
-                                name.contains(&q) || desc.contains(&q)
-                            }
+                            q.is_empty()
+                                || x.id.name.to_lowercase().contains(&q)
+                                || x.description.to_lowercase().contains(&q)
                         })
-                        // Existing filters
-                        .filter(|x| {
-                            (s.filter_repo && x.id.source == Source::Repo)
-                                || (s.filter_aur && x.id.source == Source::Aur)
-                        })
-                        .filter(|x| {
-                            if s.filter_installed {
-                                x.installed
-                            } else {
-                                true
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    // Sorting as before
-                    match s.sort {
-                        SortMode::NameAsc => v.sort_by(|a, b| a.id.name.cmp(&b.id.name)),
-                        SortMode::NameDesc => v.sort_by(|a, b| b.id.name.cmp(&a.id.name)),
-                        SortMode::Popularity => {
-                            v.sort_by(|a, b| b.popular.unwrap_or(0).cmp(&a.popular.unwrap_or(0)))
-                        }
-                    }
-                    s.results = v;
-                    if let Some(sel) = &s.selected {
-                        if !s.results.iter().any(|r| r.id == *sel) {
-                            s.selected = None;
-                        }
-                    }
+                        .collect();
+                    s.results = s.filter_and_sort(filtered);
+                    s.prune_selection();
                 }
                 Event::Upgrades { items } => {
                     s.in_upgrades_view = true;
-                    // Show upgrades in the same left pane, honoring filters/sort
-                    let mut v = items
-                        .into_iter()
-                        .filter(|x| {
-                            (s.filter_repo && x.id.source == Source::Repo)
-                                || (s.filter_aur && x.id.source == Source::Aur)
-                        })
-                        .filter(|x| {
-                            if s.filter_installed {
-                                x.installed
-                            } else {
-                                true
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    match s.sort {
-                        SortMode::NameAsc => v.sort_by(|a, b| a.id.name.cmp(&b.id.name)),
-                        SortMode::NameDesc => v.sort_by(|a, b| b.id.name.cmp(&a.id.name)),
-                        SortMode::Popularity => {
-                            v.sort_by(|a, b| b.popular.unwrap_or(0).cmp(&a.popular.unwrap_or(0)))
-                        }
-                    }
-                    s.results = v;
+                    s.results = s.filter_and_sort(items);
                     s.selected = None;
                 }
-                Event::Details { .. } => { /* not shown in v1 */ }
+                Event::Details { .. } => { /* v2 */ }
                 Event::SystemChanged => {
-                    // Decide what to refresh based on current UI mode.
-                    if s.in_upgrades_view {
-                        let id = self.jid();
-                        let _ = self.tx_jobs.send(Job {
-                            id,
-                            kind: JobKind::Upgrades,
-                            payload: JobPayload::None,
-                            created_at: std::time::SystemTime::now(),
-                            cancel: CancelToken::new(),
-                        });
-                    } else if !s.query.trim().is_empty() {
-                        let id = self.jid();
-                        let q = s.query.clone();
-                        let _ = self.tx_jobs.send(Job {
-                            id,
-                            kind: JobKind::Search,
-                            payload: JobPayload::Query(q),
-                            created_at: std::time::SystemTime::now(),
-                            cancel: CancelToken::new(),
-                        });
-                    }
+                    self.refresh_current_view(&s);
                 }
             },
+
             Action::ClearError => s.error = None,
             Action::Select(id) => s.selected = Some(id),
             Action::ClearSelection => s.selected = None,

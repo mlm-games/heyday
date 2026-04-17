@@ -2684,9 +2684,9 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "repose-core"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8da7ef833ab2136467aa7ee6af47c06d3d6893725c2b60a2c4b82103b077e473"
+checksum = "286f5f68741dce822d358abb98c2b4ebcf85b3a80913ff71d9078dcb795a941e"
 dependencies = [
  "bitflags 2.11.1",
  "log",
@@ -2700,9 +2700,9 @@ dependencies = [
 
 [[package]]
 name = "repose-devtools"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3135c417c35923bba8aede97bb4a318fb26cc13261bc4153e74934bfe8af04e"
+checksum = "f7401282e6b0b3bb1b1a84c7892cd61f5142c1dd3a77db50afe332a64d4658b0"
 dependencies = [
  "log",
  "repose-core",
@@ -2711,9 +2711,9 @@ dependencies = [
 
 [[package]]
 name = "repose-navigation"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f01476d730e24459a191be6c1336073b2c73e30e352b72d4472ae5c4094f481"
+checksum = "8e6fce889e652e4bfb52fa1f5928518350dcffc4d9946a68026073a97a99c8af"
 dependencies = [
  "log",
  "repose-core",
@@ -2724,9 +2724,9 @@ dependencies = [
 
 [[package]]
 name = "repose-platform"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "191cb1a71c81daba8e7f79b24d16bfcd5c3fb56a810c4f413998c0310dd93d0e"
+checksum = "2d00c8565682071174e82749394d5ec9c1e2c30ea5ac26f10d3c9d8d496fa830"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -2753,9 +2753,9 @@ dependencies = [
 
 [[package]]
 name = "repose-render-wgpu"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80a93856ade2d75dd956d45628339d380d540632c0797dd28a821f9ac0d30952"
+checksum = "86e9f39ad221a6e05fb6bf120e68d88ab9a4bef069999cd62c61191735339488"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -2773,9 +2773,9 @@ dependencies = [
 
 [[package]]
 name = "repose-text"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "980f83618aea77067b200f8bf2b33931d3dc9f2de87604c942d931338d9a3894"
+checksum = "f9fcf33497b7b6cbdf6038ac7c048b2e0a88f4d7306ffff9f92a0e2bfc8494f0"
 dependencies = [
  "ahash",
  "cosmic-text",
@@ -2786,9 +2786,9 @@ dependencies = [
 
 [[package]]
 name = "repose-tree"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60107bf71e7b37c4055d87773e2bad438d4aab90efe572c870c899a104436558"
+checksum = "e206eef547dc890b78de396d336760a8e5d6ae8892f7be0b1a2cdddcc850edfe"
 dependencies = [
  "ahash",
  "log",
@@ -2800,9 +2800,9 @@ dependencies = [
 
 [[package]]
 name = "repose-ui"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "569570460bbe66981698b5706fb2567b553eb681e9b9e10ab0c3e087ecb87dca"
+checksum = "e649c23c5c041c32a5ad8b72f32d53a314c9bc7b7c032c64a98d9ca4e6f9de12"
 dependencies = [
  "ab_glyph",
  "fontdb",
