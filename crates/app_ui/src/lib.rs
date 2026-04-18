@@ -5,6 +5,7 @@ use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
 use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
+    scroll::{ScrollArea, remember_scroll_state},
     *,
 };
 use std::rc::Rc;
@@ -12,6 +13,9 @@ use std::rc::Rc;
 pub mod state;
 pub mod theme;
 pub mod widgets;
+
+const PANE_HEIGHT_DP: f32 = 520.0;
+const LOG_HEIGHT_DP: f32 = 180.0;
 
 fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
     let title = if s.in_upgrades_view {
@@ -67,7 +71,6 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
             }),
     )
     .child((
-        // Row 1: query field + search button
         Row(Modifier::new().fill_max_width()).child((
             TextField(
                 "Search packages…",
@@ -109,7 +112,6 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
             }),
         )),
         Space(Modifier::new().height(8.0)),
-        // Row 2: filters + sort
         Row(Modifier::new().fill_max_width()).child(vec![
             chip("Repo", s.filter_repo, {
                 let store = store.clone();
@@ -188,7 +190,6 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
             move |_| store.dispatch(Action::Select(id.clone()))
         }))
     .child((
-        // Left: name + badges + description
         Column(Modifier::new().flex_grow(1.0)).child((
             Row(Modifier::new()).child((
                 Text(pkg.id.name.clone())
@@ -211,7 +212,6 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
                 .overflow_ellipsize()
                 .modifier(Modifier::new().max_width(480.0)),
         )),
-        // Right: version + action
         Column(Modifier::new().align_self_center()).child((
             Text(pkg.version.clone())
                 .size(FONT_XS)
@@ -250,9 +250,13 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
 
     LazyColumn(
         results,
-        72.0,
-        remember_with_key("pkg_scroll", || LazyColumnState::new()),
-        Modifier::new().fill_max_size().padding(4.0),
+        76.0,
+        remember_with_key("pkg_scroll", LazyColumnState::new),
+        Modifier::new()
+            .fill_max_width()
+            .height(PANE_HEIGHT_DP)
+            .clip_rounded(R_SM)
+            .padding(4.0),
         move |pkg: PackageSummary, _| {
             let is_sel = selected.as_ref().is_some_and(|id| *id == pkg.id);
             pkg_row(store.clone(), pkg, is_sel, upgrades_mode)
@@ -265,7 +269,6 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
         return empty_state("Package details", "Select a package on the left.");
     };
 
-    // While waiting for full details, show summary from the list.
     let summary = match s.results.iter().find(|p| &p.id == sel_id) {
         Some(p) => p.clone(),
         None => return empty_state("Package details", "Selection not in current results."),
@@ -273,7 +276,6 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
 
     let is_aur = summary.id.source == Source::Aur;
 
-    // Build the header (always visible immediately).
     let header = Column(Modifier::new().fill_max_width()).child((
         Row(Modifier::new()).child((
             Text(summary.id.name.clone())
@@ -300,7 +302,6 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
             .overflow_ellipsize(),
     ));
 
-    // Actions row
     let actions = Row(Modifier::new().padding_values(PaddingValues {
         left: 0.0,
         right: 0.0,
@@ -316,7 +317,6 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
         }),
     ));
 
-    // If we have full details, show them; otherwise a loading hint.
     let detail_section: View = if let Some(det) = &s.detail {
         details_body(det)
     } else {
@@ -326,22 +326,27 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
             .modifier(Modifier::new().padding(8.0))
     };
 
-    Column(
+    let scroll = remember_scroll_state(format!(
+        "detail:{}:{:?}",
+        summary.id.name, summary.id.source
+    ));
+
+    ScrollArea(
         Modifier::new()
-            .fill_max_size()
-            .padding(16.0)
+            .fill_max_width()
+            .height(PANE_HEIGHT_DP)
             .then(card_mod()),
+        scroll,
+        Column(Modifier::new().fill_max_width().padding(16.0)).child((
+            header,
+            divider(),
+            actions,
+            Space(Modifier::new().height(8.0)),
+            detail_section,
+        )),
     )
-    .child((
-        header,
-        divider(),
-        actions,
-        Space(Modifier::new().height(8.0)),
-        detail_section,
-    ))
 }
 
-/// The rich metadata section (only rendered once `PackageDetails` arrives).
 fn details_body(det: &PackageDetails) -> View {
     Column(Modifier::new().fill_max_width()).child((
         detail_row("Homepage", det.homepage.as_deref().unwrap_or("")),
@@ -400,18 +405,25 @@ fn log_panel(s: &AppState) -> View {
     if !s.log_expanded {
         return Box(Modifier::new());
     }
-    Box(Modifier::new()
-        .fill_max_width()
-        .height(180.0)
-        .padding(12.0)
-        .margin_vertical(4.0)
-        .background(Color::from_hex(CARD_BG))
-        .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-        .clip_rounded(R_MD))
-    .child(
-        Text(s.progress_log.clone())
-            .size(12.0)
-            .color(Color::from_hex(LOG_TEXT)),
+
+    let scroll = remember_scroll_state("log_panel");
+
+    ScrollArea(
+        Modifier::new()
+            .fill_max_width()
+            .height(LOG_HEIGHT_DP)
+            .padding(12.0)
+            .margin_vertical(4.0)
+            .background(Color::from_hex(CARD_BG))
+            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+            .clip_rounded(R_MD),
+        scroll,
+        Column(Modifier::new().fill_max_width()).child(
+            Text(s.progress_log.clone())
+                .size(12.0)
+                .color(Color::from_hex(LOG_TEXT))
+                .modifier(Modifier::new().fill_max_width()),
+        ),
     )
 }
 
@@ -427,19 +439,12 @@ pub fn root_view(store: Rc<Store>) -> View {
             divider(),
             search_section(&store, &s),
             Space(Modifier::new().height(8.0)),
-            // Main content: list + details
-            Grid(
-                6,
-                Modifier::new().fill_max_size().flex_grow(1.0),
-                vec![
-                    Box(Modifier::new().grid_span(3, 1).padding(4.0))
-                        .child(results_list(&store, &s)),
-                    Box(Modifier::new().grid_span(3, 1).padding(4.0))
-                        .child(details_pane(store.clone(), &s)),
-                ],
-                8.0,
-                8.0,
-            ),
+            Row(Modifier::new().fill_max_width()).child((
+                Box(Modifier::new().flex_grow(3.0).padding(4.0)).child(results_list(&store, &s)),
+                Space(Modifier::new().width(8.0)),
+                Box(Modifier::new().flex_grow(3.0).padding(4.0))
+                    .child(details_pane(store.clone(), &s)),
+            )),
             status_bar(&store, &s),
             log_panel(&s),
         )),
