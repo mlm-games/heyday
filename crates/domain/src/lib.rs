@@ -2,8 +2,8 @@ use crossbeam_channel as chan;
 use parking_lot::Mutex;
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::SystemTime,
 };
@@ -360,7 +360,7 @@ impl Executor {
                                     );
                                 }
                             }
-                            // Sort A–Z for stability; UI can re-sort
+                            // Sort A-Z for stability; UI can re-sort
                             items.sort_by(|a, b| a.id.name.cmp(&b.id.name));
                             tx_evt
                                 .send(Event::Upgrades { items })

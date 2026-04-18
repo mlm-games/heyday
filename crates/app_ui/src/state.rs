@@ -26,21 +26,33 @@ impl Default for SortMode {
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub query: String,
+
+    /// Raw results from the last search/upgrades event (unfiltered).
+    pub raw_results: Vec<PackageSummary>,
+    /// Filtered + sorted view shown in the list.
     pub results: Vec<PackageSummary>,
+
     pub selected: Option<PackageId>,
+    /// Full details for the selected package (fetched lazily).
+    pub detail: Option<PackageDetails>,
+
     pub filter_repo: bool,
     pub filter_aur: bool,
     pub filter_installed: bool,
     pub sort: SortMode,
+
     pub progress_log: String,
     pub log_expanded: bool,
     pub in_upgrades_view: bool,
 }
 
 impl AppState {
-    pub fn filter_and_sort(&self, items: Vec<PackageSummary>) -> Vec<PackageSummary> {
-        let mut v: Vec<PackageSummary> = items
-            .into_iter()
+    /// Recompute `results` from `raw_results` + current filters/sort.
+    pub fn refilter(&mut self) {
+        let mut v: Vec<PackageSummary> = self
+            .raw_results
+            .iter()
+            .cloned()
             .filter(|x| {
                 (self.filter_repo && x.id.source == Source::Repo)
                     || (self.filter_aur && x.id.source == Source::Aur)
@@ -55,7 +67,8 @@ impl AppState {
                 v.sort_by(|a, b| b.popular.unwrap_or(0).cmp(&a.popular.unwrap_or(0)))
             }
         }
-        v
+        self.results = v;
+        self.prune_selection();
     }
 
     pub fn append_log(&mut self, line: &str) {
@@ -74,10 +87,11 @@ impl AppState {
         }
     }
 
-    pub fn prune_selection(&mut self) {
+    fn prune_selection(&mut self) {
         if let Some(sel) = &self.selected {
             if !self.results.iter().any(|r| r.id == *sel) {
                 self.selected = None;
+                self.detail = None;
             }
         }
     }
@@ -150,6 +164,10 @@ impl Store {
         self.send_job(JobKind::Upgrades, JobPayload::None);
     }
 
+    fn send_details(&self, id: &PackageId) {
+        self.send_job(JobKind::Details, JobPayload::Package(id.clone()));
+    }
+
     fn refresh_current_view(&self, s: &AppState) {
         if s.in_upgrades_view {
             self.send_upgrades();
@@ -194,9 +212,11 @@ impl Store {
 
             Action::Search => {
                 s.in_upgrades_view = false;
+                s.detail = None;
                 let q = s.query.trim().to_string();
                 self.send_search(&q);
                 if q.is_empty() {
+                    s.raw_results.clear();
                     s.results.clear();
                     s.selected = None;
                 }
@@ -209,6 +229,7 @@ impl Store {
 
             Action::Upgrades => {
                 s.in_upgrades_view = true;
+                s.detail = None;
                 self.send_upgrades();
             }
 
@@ -229,12 +250,12 @@ impl Store {
             }
 
             Action::Progress(mut p) => {
-                let log = p.log.clone();
                 if let Some(l) = p.log.take() {
                     s.append_log(&l);
                 }
                 if matches!(p.stage, Stage::Failed) {
-                    let msg = log
+                    let msg = p
+                        .log
                         .clone()
                         .and_then(|t| {
                             let t = t.trim().to_string();
@@ -251,7 +272,7 @@ impl Store {
                 Event::SearchResults { items, .. } => {
                     s.in_upgrades_view = false;
                     let q = s.query.to_lowercase();
-                    let filtered = items
+                    s.raw_results = items
                         .into_iter()
                         .filter(|x| {
                             q.is_empty()
@@ -259,26 +280,56 @@ impl Store {
                                 || x.description.to_lowercase().contains(&q)
                         })
                         .collect();
-                    s.results = s.filter_and_sort(filtered);
-                    s.prune_selection();
+                    s.refilter();
                 }
                 Event::Upgrades { items } => {
                     s.in_upgrades_view = true;
-                    s.results = s.filter_and_sort(items);
+                    s.raw_results = items;
+                    s.refilter();
                     s.selected = None;
+                    s.detail = None;
                 }
-                Event::Details { .. } => { /* v2 */ }
+                Event::Details { item } => {
+                    // Only accept if it matches the current selection.
+                    if s.selected.as_ref() == Some(&item.summary.id) {
+                        s.detail = Some(item);
+                    }
+                }
                 Event::SystemChanged => {
                     self.refresh_current_view(&s);
                 }
             },
 
-            Action::Select(id) => s.selected = Some(id),
-            Action::ClearSelection => s.selected = None,
-            Action::ToggleFilterRepo => s.filter_repo = !s.filter_repo,
-            Action::ToggleFilterAur => s.filter_aur = !s.filter_aur,
-            Action::ToggleFilterInstalled => s.filter_installed = !s.filter_installed,
-            Action::SetSort(m) => s.sort = m,
+            Action::Select(id) => {
+                if s.selected.as_ref() != Some(&id) {
+                    s.detail = None; // clear stale detail
+                    self.send_details(&id);
+                }
+                s.selected = Some(id);
+            }
+
+            Action::ClearSelection => {
+                s.selected = None;
+                s.detail = None;
+            }
+
+            Action::ToggleFilterRepo => {
+                s.filter_repo = !s.filter_repo;
+                s.refilter();
+            }
+            Action::ToggleFilterAur => {
+                s.filter_aur = !s.filter_aur;
+                s.refilter();
+            }
+            Action::ToggleFilterInstalled => {
+                s.filter_installed = !s.filter_installed;
+                s.refilter();
+            }
+            Action::SetSort(m) => {
+                s.sort = m;
+                s.refilter();
+            }
+
             Action::ToggleLog => s.log_expanded = !s.log_expanded,
         }
         self.state.set(s);
