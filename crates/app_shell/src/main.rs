@@ -1,8 +1,9 @@
 use crossbeam_channel as chan;
 use notify::{
-    event::{CreateKind, ModifyKind, RemoveKind},
     EventKind, RecursiveMode, Watcher,
+    event::{CreateKind, ModifyKind, RemoveKind},
 };
+use repose_core::Modifier;
 use std::{
     path::Path,
     rc::Rc,
@@ -19,7 +20,8 @@ use backend_aur::AurBackend;
 use backend_pacman::PacmanCli;
 use domain::{Executor, PackageBackend};
 use log::error;
-use repose_platform::run_desktop_app;
+use repose_platform::run_desktop_app_with_snackbar;
+use repose_ui::overlay::{OverlayHandle, SnackbarController};
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -40,7 +42,14 @@ fn main() -> anyhow::Result<()> {
     )
     .run();
 
-    let store = Rc::new(Store::new(tx_jobs));
+    let overlay = OverlayHandle::new();
+    let snackbar = SnackbarController::new(overlay.clone());
+
+    let tick: Rc<dyn Fn(u32)> = Rc::new(move |ms| {
+        SnackbarController::tick_for_frame(ms);
+    });
+
+    let store = Rc::new(Store::new(tx_jobs, Some(snackbar.clone())));
 
     {
         let tx_watch = tx_watch.clone();
@@ -61,11 +70,10 @@ fn main() -> anyhow::Result<()> {
                     let is_meaningful_kind = matches!(
                         ev.kind,
                         EventKind::Create(CreateKind::Folder)
-                 | EventKind::Remove(RemoveKind::Folder)
-                 | EventKind::Modify(ModifyKind::Name(_))
-                 // test a strict file-level signal 
-                 | EventKind::Create(CreateKind::File)
-                 | EventKind::Remove(RemoveKind::File)
+                            | EventKind::Remove(RemoveKind::Folder)
+                            | EventKind::Modify(ModifyKind::Name(_))
+                            | EventKind::Create(CreateKind::File)
+                            | EventKind::Remove(RemoveKind::File)
                     );
                     if !is_meaningful_kind {
                         return; // ignore Access/Metadata/etc.
@@ -118,20 +126,23 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    run_desktop_app(move |_sched, _ctx| {
-        while let Ok(p) = rx_prog.try_recv() {
-            store.dispatch(Action::Progress(p));
-        }
-        while let Ok(e) = rx_evt.try_recv() {
-            store.dispatch(Action::Event(e));
-        }
-        let mut saw = false;
-        while rx_watch.try_recv().is_ok() {
-            saw = true;
-        }
-        if saw {
-            store.dispatch(Action::Event(domain::Event::SystemChanged));
-        }
-        root_view(store.clone())
-    })
+    run_desktop_app_with_snackbar(
+        move |_sched, _ctx| {
+            while let Ok(p) = rx_prog.try_recv() {
+                store.dispatch(Action::Progress(p));
+            }
+            while let Ok(e) = rx_evt.try_recv() {
+                store.dispatch(Action::Event(e));
+            }
+            let mut saw = false;
+            while rx_watch.try_recv().is_ok() {
+                saw = true;
+            }
+            if saw {
+                store.dispatch(Action::Event(domain::Event::SystemChanged));
+            }
+            overlay.host(Modifier::new().fill_max_size(), root_view(store.clone()))
+        },
+        Some(tick),
+    )
 }

@@ -32,7 +32,11 @@ pub fn installed_badge() -> View {
 }
 
 pub fn source_badge(is_aur: bool) -> View {
-    if is_aur { aur_badge() } else { repo_badge() }
+    if is_aur {
+        aur_badge()
+    } else {
+        repo_badge()
+    }
 }
 
 pub fn chip(label: &str, on: bool, on_toggle: impl Fn() + 'static) -> View {

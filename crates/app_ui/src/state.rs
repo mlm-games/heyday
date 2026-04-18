@@ -1,6 +1,11 @@
 use crossbeam_channel as chan;
 use domain::*;
 use repose_core::signal::signal;
+use repose_core::*;
+use repose_ui::overlay::{SnackbarController, SnackbarRequest};
+use repose_ui::*;
+use std::rc::Rc;
+use std::sync::atomic::AtomicU64;
 
 const MAX_LOG: usize = 256 * 1024;
 
@@ -27,7 +32,6 @@ pub struct AppState {
     pub filter_installed: bool,
     pub sort: SortMode,
     pub progress_log: String,
-    pub error: Option<String>,
     pub log_expanded: bool,
     pub in_upgrades_view: bool,
 }
@@ -90,7 +94,6 @@ pub enum Action {
     Remove(PackageId),
     Progress(Progress),
     Event(Event),
-    ClearError,
     Select(PackageId),
     ClearSelection,
     ToggleFilterRepo,
@@ -101,13 +104,14 @@ pub enum Action {
 }
 
 pub struct Store {
-    pub state: repose_core::signal::Signal<AppState>,
+    pub state: Signal<AppState>,
     tx_jobs: chan::Sender<domain::Job>,
-    next_id: std::sync::atomic::AtomicU64,
+    next_id: AtomicU64,
+    pub snackbar: Option<SnackbarController>,
 }
 
 impl Store {
-    pub fn new(tx_jobs: chan::Sender<domain::Job>) -> Self {
+    pub fn new(tx_jobs: chan::Sender<domain::Job>, snackbar: Option<SnackbarController>) -> Self {
         let s = AppState {
             filter_repo: true,
             filter_aur: true,
@@ -118,6 +122,7 @@ impl Store {
             state: signal(s),
             tx_jobs,
             next_id: std::sync::atomic::AtomicU64::new(1),
+            snackbar,
         }
     }
 
@@ -149,6 +154,30 @@ impl Store {
             self.send_upgrades();
         } else if !s.query.trim().is_empty() {
             self.send_search(&s.query);
+        }
+    }
+
+    pub fn show_snackbar(&self, msg: String) {
+        if let Some(ref snackbar) = self.snackbar {
+            let request = SnackbarRequest {
+                message: msg.clone(),
+                action: None,
+                duration_ms: 6000,
+                builder: Rc::new(move || {
+                    let m = msg.clone();
+                    Row(Modifier::new().padding_values(PaddingValues {
+                        left: 16.0,
+                        right: 16.0,
+                        top: 12.0,
+                        bottom: 12.0,
+                    }))
+                    .child((Text(m)
+                        .color(Color::WHITE)
+                        .size(14.0)
+                        .modifier(Modifier::new().flex_grow(1.0)),))
+                }),
+            };
+            snackbar.show(request);
         }
     }
 
@@ -197,8 +226,8 @@ impl Store {
                 if let Some(l) = p.log.take() {
                     s.append_log(&l);
                 }
-                if matches!(p.stage, Stage::Failed) && s.error.is_none() {
-                    s.error = p
+                if matches!(p.stage, Stage::Failed) {
+                    let msg = p
                         .log
                         .clone()
                         .and_then(|t| {
@@ -206,6 +235,9 @@ impl Store {
                             if t.is_empty() { None } else { Some(t) }
                         })
                         .or_else(|| Some("operation failed".into()));
+                    if let Some(m) = msg {
+                        self.show_snackbar(m);
+                    }
                 }
             }
 
@@ -235,7 +267,6 @@ impl Store {
                 }
             },
 
-            Action::ClearError => s.error = None,
             Action::Select(id) => s.selected = Some(id),
             Action::ClearSelection => s.selected = None,
             Action::ToggleFilterRepo => s.filter_repo = !s.filter_repo,

@@ -154,27 +154,6 @@ fn details_card(store: Rc<Store>) -> View {
     ))
 }
 
-fn error_banner(store: &Rc<Store>, err: String) -> View {
-    Row(Modifier::new()
-        .padding(16.0)
-        .margin_vertical(16.0)
-        .background_brush(h_gradient(ERROR_BG_START, ERROR_BG_END))
-        .border(1.0, Color::from_hex(ERROR_BORDER), CORNER_LG)
-        .clip_rounded(CORNER_LG))
-    .child((
-        Text("⚠️").size(20.0).modifier(Modifier::new().padding(4.0)),
-        Space(Modifier::new().width(12.0)),
-        Text(err)
-            .color(Color::from_hex(ERROR_TEXT))
-            .size(BODY_FONT)
-            .modifier(Modifier::new().flex_grow(1.0)),
-        secondary_button("Dismiss", {
-            let store = store.clone();
-            move || store.dispatch(Action::ClearError)
-        }),
-    ))
-}
-
 fn header_bar(store: &Rc<Store>, s: &state::AppState) -> View {
     Row(Modifier::new().padding_values(PaddingValues {
         left: 8.0,
@@ -378,12 +357,6 @@ pub fn root_view(store: Rc<Store>) -> View {
             .fill_max_size()
             .background_brush(v_gradient(BG_START, BG_END)),
         Column(Modifier::new().padding(20.0)).child((
-            // Error banner (if any)
-            if let Some(err) = s.error.clone() {
-                error_banner(&store, err)
-            } else {
-                Box(Modifier::new())
-            },
             header_bar(&store, &s),
             separator(),
             search_bar(&store, &s),
