@@ -26,9 +26,10 @@ urlencoding = "2"
 tempfile = "3"
 notify = "8"
 log = "0.4"
-repose-ui = "0.13.3"
-repose-core = "0.13.3"
-repose-platform = { version = "0.13.3", features = ["desktop"] }
+repose-ui = "0.14.0"
+repose-core = "0.14.0"
+repose-platform = { version = "0.14.0", features = ["desktop"] }
+repose-material = "0.14.0"
 
 
 [profile.release]
@@ -41,3 +42,4 @@ strip = "symbols"
 # repose-core = { path = "../repose/crates/repose-core" }
 # repose-ui = { path = "../repose/crates/repose-ui" }
 # repose-platform = { path = "../repose/crates/repose-platform" }
+# repose-material = { path = "../repose/crates/repose-material" }

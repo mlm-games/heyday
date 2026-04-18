@@ -6,5 +6,6 @@ edition.workspace = true
 [dependencies]
 repose-ui.workspace = true
 repose-core.workspace = true
+repose-material.workspace = true
 domain = { path = "../domain" }
 crossbeam-channel.workspace = true

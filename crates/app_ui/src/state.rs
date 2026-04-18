@@ -1,9 +1,10 @@
 use crossbeam_channel as chan;
 use domain::*;
+use repose_core::locals::with_theme;
 use repose_core::signal::signal;
 use repose_core::*;
+use repose_material::material3;
 use repose_ui::overlay::{SnackbarController, SnackbarRequest};
-use repose_ui::*;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 
@@ -159,22 +160,27 @@ impl Store {
 
     pub fn show_snackbar(&self, msg: String) {
         if let Some(ref snackbar) = self.snackbar {
+            let mut snackbar_theme = theme();
+            snackbar_theme.colors.surface_variant = snackbar_theme.error_container;
+            snackbar_theme.colors.on_surface = snackbar_theme.on_error_container;
+            snackbar_theme.colors.primary = snackbar_theme.on_error_container;
+            snackbar_theme.colors.outline_variant = snackbar_theme.error_container;
+            let msg = msg.clone();
             let request = SnackbarRequest {
                 message: msg.clone(),
                 action: None,
                 duration_ms: 6000,
                 builder: Rc::new(move || {
-                    let m = msg.clone();
-                    Row(Modifier::new().padding_values(PaddingValues {
-                        left: 16.0,
-                        right: 16.0,
-                        top: 12.0,
-                        bottom: 12.0,
-                    }))
-                    .child((Text(m)
-                        .color(Color::WHITE)
-                        .size(14.0)
-                        .modifier(Modifier::new().flex_grow(1.0)),))
+                    with_theme(snackbar_theme, || {
+                        material3::Snackbar(
+                            msg.clone(),
+                            None,
+                            Modifier::new()
+                                .absolute()
+                                .offset(Some(16.0), None, Some(16.0), Some(16.0))
+                                .background(snackbar_theme.error_container),
+                        )
+                    })
                 }),
             };
             snackbar.show(request);
@@ -223,12 +229,12 @@ impl Store {
             }
 
             Action::Progress(mut p) => {
+                let log = p.log.clone();
                 if let Some(l) = p.log.take() {
                     s.append_log(&l);
                 }
                 if matches!(p.stage, Stage::Failed) {
-                    let msg = p
-                        .log
+                    let msg = log
                         .clone()
                         .and_then(|t| {
                             let t = t.trim().to_string();
