@@ -1,10 +1,10 @@
 use domain::*;
+use parking_lot::Mutex;
 use regex::Regex;
 use std::{
-    collections::HashSet,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock},
 };
 
 pub struct PacmanCli;
@@ -18,26 +18,13 @@ impl PacmanCli {
         Self
     }
 
-    fn installed_set() -> HashSet<String> {
-        let out = Command::new("pacman").args(["-Qq"]).output().ok();
-        let mut set = HashSet::new();
-        if let Some(out) = out {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                let n = line.trim();
-                if !n.is_empty() {
-                    set.insert(n.to_string());
-                }
-            }
-        }
-        set
-    }
-
     fn parse_upgrades(out: &str) -> Vec<PackageSummary> {
         // Lines look like: "pkgname oldver -> newver"
-        let re = Regex::new(r"^(?P<name>\S+)\s+\S+\s+->\s+(?P<new>\S+)").unwrap();
+        static RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"^(?P<name>\S+)\s+\S+\s+->\s+(?P<new>\S+)").unwrap());
         out.lines()
             .filter_map(|l| {
-                re.captures(l).map(|c| PackageSummary {
+                RE.captures(l).map(|c| PackageSummary {
                     id: PackageId {
                         name: c["name"].to_string(),
                         source: Source::Repo,
@@ -53,7 +40,7 @@ impl PacmanCli {
     }
 
     fn search_fallback_names(&self, q: &str, sink: &ProgressSink) -> Result<Vec<PackageSummary>> {
-        let installed = Self::installed_set();
+        let installed = installed_package_names();
         let out = match std::process::Command::new("pacman")
             .args(["-Ssq", q])
             .output()
@@ -135,17 +122,19 @@ impl PacmanCli {
 
 /// parsing for -Ss
 fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
-    let re_head =
+    static RE_HEAD: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^(?P<repo>\S+)/(?P<name>\S+)\s+(?P<ver>\S+)(?:\s+\[installed.*\])?\s*$")
-            .unwrap();
-    let re_inst = Regex::new(r"\[installed").unwrap();
+            .unwrap()
+    });
+    static RE_INST: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[installed").unwrap());
     let mut res = Vec::new();
     let mut last: Option<PackageSummary> = None;
     for line in out.lines() {
-        if let Some(c) = re_head.captures(line) {
+        if let Some(c) = RE_HEAD.captures(line) {
             let name = c["name"].to_string();
             let ver = c["ver"].to_string();
-            let installed = re_inst.is_match(line);
+            let installed = RE_INST.is_match(line);
             last = Some(PackageSummary {
                 id: PackageId {
                     name,
@@ -303,8 +292,8 @@ impl PacmanCli {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| Error::Internal(format!("spawn: {e}")))?;
-        let out = child.stdout.take().unwrap();
-        let err = child.stderr.take().unwrap();
+        let out = child.stdout.take().expect("stdout should be piped");
+        let err = child.stderr.take().expect("stderr should be piped");
 
         let jid = 0u64;
         let tx1 = sink.clone();
@@ -332,7 +321,7 @@ impl PacmanCli {
         let t2 = std::thread::spawn(move || {
             for l in BufReader::new(err).lines().flatten() {
                 {
-                    let mut g = last_err_t2.lock().unwrap();
+                    let mut g = last_err_t2.lock();
                     *g = Some(l.clone());
                 }
                 let _ = tx2.send(Progress {
@@ -352,7 +341,7 @@ impl PacmanCli {
                     let _ = t1.join();
                     let _ = t2.join();
                     let code = status.code().unwrap_or(-1);
-                    let last = last_err.lock().unwrap().clone();
+                    let last = last_err.lock().clone();
                     return Ok((code, last));
                 }
                 Ok(None) => {
@@ -378,6 +367,17 @@ impl PacmanCli {
 }
 
 impl PackageBackend for PacmanCli {
+    fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        let mut cmd = Command::new("pkexec");
+        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
+        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
+        if code == 0 {
+            Ok(())
+        } else {
+            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+            Err(Error::Priv(format!("install exit {code}{why}")))
+        }
+    }
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let try_pkexec = || -> Result<()> {
             let mut cmd = Command::new("pkexec");
@@ -549,18 +549,6 @@ impl PackageBackend for PacmanCli {
         Ok(parse_pacman_details(&s, summary))
     }
 
-    fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
-        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("install exit {code}{why}")))
-        }
-    }
-
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let mut cmd = Command::new("pkexec");
         cmd.args(["pacman", "-Rns", "--noconfirm", &id.name]);
@@ -602,16 +590,7 @@ impl PackageBackend for PacmanCli {
     }
 
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        // Upgrades a single repo package to the latest available version.
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
-        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("upgrade exit {code}{why}")))
-        }
+        self.install(id, sink, cancel)
     }
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -625,5 +604,117 @@ impl PackageBackend for PacmanCli {
             let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
             Err(Error::Priv(format!("upgrade-all exit {code}{why}")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_upgrades_empty() {
+        let r = PacmanCli::parse_upgrades("");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn test_parse_upgrades_single() {
+        let r = PacmanCli::parse_upgrades("foo 1.0 -> 2.0\n");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].id.name, "foo");
+        assert_eq!(r[0].version, "2.0");
+        assert_eq!(r[0].id.source, Source::Repo);
+    }
+
+    #[test]
+    fn test_parse_upgrades_multiple() {
+        let input = "a 1 -> 2\nb 3 -> 4\nc 5 -> 6\n";
+        let r = PacmanCli::parse_upgrades(input);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].id.name, "a");
+        assert_eq!(r[1].id.name, "b");
+        assert_eq!(r[2].id.name, "c");
+    }
+
+    #[test]
+    fn test_parse_pacman_search_empty() {
+        let r = parse_pacman_search("");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn test_parse_pacman_search_single() {
+        let input = "core/foo 1.0.0-1\n    A test package\n";
+        let r = parse_pacman_search(input);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].id.name, "foo");
+        assert_eq!(r[0].version, "1.0.0-1");
+        assert_eq!(r[0].description, "A test package");
+    }
+
+    #[test]
+    fn test_parse_pacman_search_installed() {
+        let input = "core/foo 1.0.0-1 [installed]\n    desc\n";
+        let r = parse_pacman_search(input);
+        assert_eq!(r.len(), 1);
+        assert!(r[0].installed);
+    }
+
+    #[test]
+    fn test_parse_pacman_search_not_installed() {
+        let input = "core/foo 1.0.0-1\n    desc\n";
+        let r = parse_pacman_search(input);
+        assert_eq!(r.len(), 1);
+        assert!(!r[0].installed);
+    }
+
+    #[test]
+    fn test_parse_pacman_search_multiple() {
+        let input = "core/a 1.0-1\n    pkg a\nextra/b 2.0-2 [installed]\n    pkg b\n";
+        let r = parse_pacman_search(input);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].id.name, "a");
+        assert!(!r[0].installed);
+        assert_eq!(r[1].id.name, "b");
+        assert!(r[1].installed);
+    }
+
+    #[test]
+    fn test_parse_pacman_search_no_desc() {
+        // A package header with no following description line
+        let input = "core/foo 1.0-1\n";
+        let r = parse_pacman_search(input);
+        assert_eq!(r.len(), 1); // parsed with empty description
+        assert_eq!(r[0].description, "");
+    }
+
+    #[test]
+    fn test_parse_size_bytes() {
+        assert_eq!(parse_size("42 B"), 42);
+    }
+
+    #[test]
+    fn test_parse_size_kib() {
+        assert_eq!(parse_size("1.5 KiB"), 1536);
+    }
+
+    #[test]
+    fn test_parse_size_mib() {
+        assert_eq!(parse_size("2 MiB"), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_gib() {
+        assert_eq!(parse_size("1 GiB"), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_default_unit() {
+        assert_eq!(parse_size("100"), 100);
+    }
+
+    #[test]
+    fn test_parse_size_zero() {
+        assert_eq!(parse_size("0 B"), 0);
     }
 }

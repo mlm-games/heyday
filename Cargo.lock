@@ -484,6 +484,7 @@ version = "0.3.1"
 dependencies = [
  "domain",
  "nix",
+ "parking_lot",
  "regex",
 ]
 

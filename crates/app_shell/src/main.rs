@@ -8,7 +8,7 @@ use std::{
     path::Path,
     rc::Rc,
     sync::Arc,
-    thread::{sleep, spawn},
+    thread::spawn,
     time::{Duration, Instant},
 };
 
@@ -52,7 +52,6 @@ fn main() -> anyhow::Result<()> {
     let store = Rc::new(Store::new(tx_jobs, Some(snackbar.clone())));
 
     {
-        let tx_watch = tx_watch.clone();
         spawn(move || {
             // Callback-style watcher; coalesce by just sending a signal.
             const LOCAL_DB: &str = "/var/lib/pacman/local";
@@ -62,8 +61,12 @@ fn main() -> anyhow::Result<()> {
 
             let mut watcher =
                 notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                    let Ok(ev) = res else {
-                        return;
+                    let ev = match res {
+                        Ok(e) => e,
+                        Err(e) => {
+                            error!("file watcher error: {e}");
+                            return;
+                        }
                     };
 
                     // Only react to meaningful changes.
@@ -112,17 +115,15 @@ fn main() -> anyhow::Result<()> {
                         let _ = tx_watch.send(());
                     }
                 })
-                .expect("watcher");
+                .expect("watcher failed — check inotify limits (/proc/sys/fs/inotify/max_user_watches)");
 
             // Watch the local DB (recursive to see renames and file-level events as needed)
             if let Err(e) = watcher.watch(Path::new(LOCAL_DB), RecursiveMode::Recursive) {
                 error!("package DB watcher failed to start: {e}");
                 return;
             }
-            // Keep thread alive.
-            loop {
-                sleep(Duration::from_secs(3600));
-            }
+            // Keep thread alive indefinitely.
+            std::thread::park();
         });
     }
 

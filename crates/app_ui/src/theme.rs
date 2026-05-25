@@ -17,7 +17,6 @@ pub const TEXT_PRIMARY: &str = "#F9FAFB";
 pub const TEXT_SECONDARY: &str = "#D1D5DB";
 pub const TEXT_MUTED: &str = "#9CA3AF";
 pub const TEXT_DIMMED: &str = "#6B7280";
-pub const TEXT_LINK: &str = "#60A5FA";
 
 pub const GREEN: &str = "#22C55E";
 pub const GREEN_BG: &str = "#052E16";
@@ -27,7 +26,6 @@ pub const RED: &str = "#F87171";
 pub const RED_BG: &str = "#2B0606";
 pub const RED_BORDER: &str = "#DC2626";
 
-pub const BLUE: &str = "#3B82F6";
 pub const BLUE_BG: &str = "#172554";
 pub const BLUE_BORDER: &str = "#2563EB";
 
@@ -67,15 +65,6 @@ pub fn v_gradient(top: &str, bot: &str) -> Brush {
         end: Vec2 { x: 0.0, y: 1.0 },
         start_color: Color::from_hex(top),
         end_color: Color::from_hex(bot),
-    }
-}
-
-pub fn h_gradient(left: &str, right: &str) -> Brush {
-    Brush::Linear {
-        start: Vec2 { x: 0.0, y: 0.0 },
-        end: Vec2 { x: 1.0, y: 0.0 },
-        start_color: Color::from_hex(left),
-        end_color: Color::from_hex(right),
     }
 }
 

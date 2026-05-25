@@ -1,6 +1,7 @@
 use crossbeam_channel as chan;
 use parking_lot::Mutex;
 use std::{
+    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -171,13 +172,28 @@ pub struct Job {
 
 static TXN_MUTEX: Mutex<()> = Mutex::new(());
 
+/// Returns the set of currently installed package names (via `pacman -Qq`).
+pub fn installed_package_names() -> HashSet<String> {
+    let out = std::process::Command::new("pacman").args(["-Qq"]).output().ok();
+    let mut set = HashSet::new();
+    if let Some(out) = out {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let n = line.trim();
+            if !n.is_empty() {
+                set.insert(n.to_string());
+            }
+        }
+    }
+    set
+}
+
 pub struct Executor {
     repo: Arc<dyn PackageBackend>,
     aur: Arc<dyn PackageBackend>,
     tx_prog: chan::Sender<Progress>,
     tx_evt: chan::Sender<Event>,
     rx_jobs: chan::Receiver<Job>,
-    active_search_id: parking_lot::Mutex<Option<u64>>,
+    active_search_id: Option<u64>,
 }
 
 impl Executor {
@@ -194,11 +210,11 @@ impl Executor {
             tx_prog,
             tx_evt,
             rx_jobs,
-            active_search_id: parking_lot::Mutex::new(None),
+            active_search_id: None,
         }
     }
 
-    pub fn run(self) {
+    pub fn run(mut self) {
         std::thread::spawn(move || {
             while let Ok(job) = self.rx_jobs.recv() {
                 let tx_prog = self.tx_prog.clone();
@@ -232,23 +248,21 @@ impl Executor {
 
                 let repo = &self.repo;
                 let aur = &self.aur;
+                let active_id = &mut self.active_search_id;
                 let pick = |payload: &JobPayload| -> &dyn PackageBackend {
                     match payload {
-                        JobPayload::Package(id) if id.source == Source::Aur => &*self.aur,
-                        _ => &*self.repo,
+                        JobPayload::Package(id) if id.source == Source::Aur => &**aur,
+                        _ => &**repo,
                     }
                 };
 
                 send_direct(Stage::Queued, None, false);
 
-                let run_job = || -> Result<()> {
+                let mut run_job = || -> Result<()> {
                     match job.kind {
                         JobKind::Refresh => pick(&job.payload).refresh(&tx_local, &cancel),
                         JobKind::Search => {
-                            {
-                                let mut g = self.active_search_id.lock();
-                                *g = Some(job.id);
-                            }
+                            *active_id = Some(job.id);
                             let q = if let JobPayload::Query(q) = &job.payload {
                                 q.trim().to_string()
                             } else {
@@ -301,11 +315,7 @@ impl Executor {
                             }
 
                             items.sort_by(|a, b| a.id.name.cmp(&b.id.name));
-                            let is_latest = {
-                                let g = self.active_search_id.lock();
-                                g.as_ref().copied() == Some(job.id)
-                            };
-                            if is_latest {
+                            if *active_id == Some(job.id) {
                                 tx_evt
                                     .send(Event::SearchResults { query: q, items })
                                     .map_err(|e| Error::Internal(e.to_string()))?;
@@ -387,7 +397,7 @@ impl Executor {
 
                 let res = run_job();
                 drop(tx_local);
-                let _ = fwd.join();
+                fwd.join().ok(); // If forwarding thread panicked, progress stops but job result is unaffected.
                 if res.is_ok() {
                     match job.kind {
                         JobKind::Install
@@ -410,5 +420,87 @@ impl Executor {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cancel_token_new_is_not_cancelled() {
+        let t = CancelToken::new();
+        assert!(!t.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancel_token_cancel() {
+        let t = CancelToken::new();
+        t.cancel();
+        assert!(t.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancel_token_clone() {
+        let t = CancelToken::new();
+        let t2 = t.clone();
+        t.cancel();
+        assert!(t2.is_cancelled());
+    }
+
+    #[test]
+    fn test_package_id_equality() {
+        let a = PackageId {
+            name: "foo".into(),
+            source: Source::Repo,
+        };
+        let b = PackageId {
+            name: "foo".into(),
+            source: Source::Repo,
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_package_id_source_diff() {
+        let a = PackageId {
+            name: "foo".into(),
+            source: Source::Repo,
+        };
+        let b = PackageId {
+            name: "foo".into(),
+            source: Source::Aur,
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_error_display() {
+        let e = Error::Network("timeout".into());
+        assert_eq!(e.to_string(), "network: timeout");
+        let e = Error::Alpm("conflict".into());
+        assert_eq!(e.to_string(), "alpm: conflict");
+        let e = Error::Cancelled;
+        assert_eq!(e.to_string(), "cancelled");
+    }
+
+    #[test]
+    fn test_stage_variants() {
+        // Just ensure all variants exist and Debug works
+        let stages = [
+            Stage::Queued,
+            Stage::Refreshing,
+            Stage::Searching,
+            Stage::Resolving,
+            Stage::Downloading,
+            Stage::Building,
+            Stage::Installing,
+            Stage::Removing,
+            Stage::Verifying,
+            Stage::Cleaning,
+            Stage::Finished,
+            Stage::Failed,
+        ];
+        assert_eq!(stages.len(), 12);
     }
 }

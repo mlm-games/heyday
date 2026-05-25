@@ -1,11 +1,11 @@
 use domain::*;
 use serde::Deserialize;
 use std::{
-    collections::HashSet,
     fs,
     io::Write,
     path::PathBuf,
     process::Command,
+    sync::LazyLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use ureq::config::Config;
@@ -44,12 +44,16 @@ impl AurBackend {
     }
 }
 
-pub fn http() -> ureq::Agent {
+static HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
     ureq::Agent::new_with_config(
         Config::builder()
             .timeout_global(Some(Duration::from_secs(7)))
             .build(),
     )
+});
+
+fn http() -> &'static ureq::Agent {
+    &HTTP
 }
 
 fn ts(opt: Option<u64>) -> Option<SystemTime> {
@@ -79,29 +83,18 @@ fn strip_ver(s: &str) -> String {
         .to_string()
 }
 
-fn find_built_pkg(dir: &PathBuf) -> Option<PathBuf> {
+fn find_built_pkg(name: &str, dir: &PathBuf) -> Option<PathBuf> {
     fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.extension().and_then(|e| e.to_str()) == Some("zst"))
-}
-
-fn validate_pkg_path(p: &PathBuf) -> bool {
-    p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("zst")
-}
-
-fn installed_set() -> HashSet<String> {
-    let out = Command::new("pacman").args(["-Qq"]).output().ok();
-    let mut set = HashSet::new();
-    if let Some(out) = out {
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let n = line.trim();
-            if !n.is_empty() {
-                set.insert(n.to_string());
-            }
-        }
-    }
-    set
+        .find(|p| {
+            let ext = p.extension().and_then(|e| e.to_str()) == Some("zst");
+            let stem = p
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with(name));
+            ext && stem
+        })
 }
 
 impl PackageBackend for AurBackend {
@@ -154,7 +147,7 @@ impl PackageBackend for AurBackend {
             .read_json()
             .map_err(|e| Error::Network(e.to_string()))?;
 
-        let installed = installed_set();
+        let installed = installed_package_names();
 
         Ok(resp
             .results
@@ -196,7 +189,7 @@ impl PackageBackend for AurBackend {
             .next()
             .ok_or_else(|| Error::Aur("not found".into()))?;
 
-        let installed = installed_set();
+        let installed = installed_package_names();
 
         let summary = PackageSummary {
             id: PackageId {
@@ -228,32 +221,41 @@ impl PackageBackend for AurBackend {
     }
 
     fn install(&self, id: &PackageId, sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
-        sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Building,
-            percent: None,
-            bytes: None,
-            log: Some(format!("building {}", id.name)),
-            warning: false,
-        })
-        .ok();
+        let send_log = |stage: Stage, msg: &str, warning: bool| {
+            let _ = sink.send(Progress {
+                job_id: 0,
+                stage,
+                percent: None,
+                bytes: None,
+                log: Some(msg.into()),
+                warning,
+            });
+        };
+
+        send_log(Stage::Building, &format!("cloning {}.git", id.name), false);
 
         let work = tempfile::tempdir().map_err(|e| Error::Internal(e.to_string()))?;
         let dir = work.path().join(&id.name);
 
         // Shallow clone to reduce bandwidth
+        let dir_str = dir
+            .to_str()
+            .ok_or_else(|| Error::Internal("non-UTF-8 temp dir path".into()))?
+            .to_string();
         let status = Command::new("git")
             .args([
                 "clone",
                 "--depth=1",
                 &format!("https://aur.archlinux.org/{}.git", id.name),
-                dir.to_str().unwrap(),
+                &dir_str,
             ])
             .status()
             .map_err(|e| Error::Internal(e.to_string()))?;
         if !status.success() {
             return Err(Error::Aur("git clone failed".into()));
         }
+
+        send_log(Stage::Building, "generating .SRCINFO", false);
 
         // Generate .SRCINFO (no shell redirection)
         let out = Command::new("makepkg")
@@ -273,11 +275,27 @@ impl PackageBackend for AurBackend {
         let srcinfo = String::from_utf8_lossy(&out.stdout);
         let deps = parse_srcinfo_deps(&srcinfo);
         if !deps.is_empty() {
-            let _ = Command::new("pkexec")
+            send_log(Stage::Resolving, &format!("preinstalling deps: {}", deps.join(", ")), false);
+            let dep_status = Command::new("pkexec")
                 .args(["pacman", "-S", "--noconfirm", "--needed"])
                 .args(deps.iter().map(|s| s.as_str()))
                 .status();
+            match dep_status {
+                Ok(s) if !s.success() => {
+                    send_log(
+                        Stage::Resolving,
+                        &format!("preinstall deps exited with code {}", s.code().unwrap_or(-1)),
+                        true,
+                    );
+                }
+                Err(e) => {
+                    send_log(Stage::Resolving, &format!("preinstall deps failed: {e}"), true);
+                }
+                _ => {}
+            }
         }
+
+        send_log(Stage::Building, &format!("running makepkg for {}", id.name), false);
 
         // Build package (no -i here)
         let status = Command::new("makepkg")
@@ -289,20 +307,29 @@ impl PackageBackend for AurBackend {
             return Err(Error::Aur("makepkg failed".into()));
         }
 
+        send_log(Stage::Installing, &format!("installing {} via pacman -U", id.name), false);
+
         // Install artifact via pacman -U
         let pkg =
-            find_built_pkg(&dir).ok_or_else(|| Error::Aur("no built package found".into()))?;
-        if !validate_pkg_path(&pkg) {
-            return Err(Error::Aur("invalid built package path".into()));
-        }
-        let code = Command::new("pkexec")
-            .args(["pacman", "-U", "--noconfirm", pkg.to_str().unwrap()])
-            .status()
+            find_built_pkg(&id.name, &dir).ok_or_else(|| Error::Aur("no built package found".into()))?;
+        let pkg_str = pkg
+            .to_str()
+            .ok_or_else(|| Error::Internal("non-UTF-8 built package path".into()))?
+            .to_string();
+        let out = Command::new("pkexec")
+            .args(["pacman", "-U", "--noconfirm", &pkg_str])
+            .output()
             .map_err(|e| Error::Priv(e.to_string()))?;
-        if code.success() {
+        if out.status.success() {
             Ok(())
         } else {
-            Err(Error::Priv("pacman -U failed".into()))
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let detail = if stderr.trim().is_empty() {
+                "pacman -U failed: see log".into()
+            } else {
+                format!("pacman -U failed: {}", stderr.trim())
+            };
+            Err(Error::Priv(detail))
         }
     }
 
@@ -329,5 +356,71 @@ impl PackageBackend for AurBackend {
     fn upgrade_all(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         // Minimal first step: do nothing. We can iterate available AUR upgrades later.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_ver_simple() {
+        assert_eq!(strip_ver("foo"), "foo");
+    }
+
+    #[test]
+    fn test_strip_ver_with_constraint() {
+        assert_eq!(strip_ver("foo>=1.0"), "foo");
+        assert_eq!(strip_ver("bar<2.0"), "bar");
+        assert_eq!(strip_ver("baz=3"), "baz");
+    }
+
+    #[test]
+    fn test_strip_ver_empty() {
+        assert_eq!(strip_ver(""), "");
+    }
+
+    #[test]
+    fn test_parse_srcinfo_deps_empty() {
+        assert!(parse_srcinfo_deps("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_srcinfo_deps_single() {
+        let input = "depends = foo>=1.0\n";
+        let r = parse_srcinfo_deps(input);
+        assert_eq!(r, vec!["foo"]);
+    }
+
+    #[test]
+    fn test_parse_srcinfo_deps_multiple() {
+        let input = "depends = foo\nmakedepends = bar>=2.0\ndepends = baz\n";
+        let r = parse_srcinfo_deps(input);
+        assert_eq!(r, vec!["bar", "baz", "foo"]); // sorted, deduped
+    }
+
+    #[test]
+    fn test_parse_srcinfo_deps_duplicates() {
+        let input = "depends = foo\ndepends = foo\n";
+        let r = parse_srcinfo_deps(input);
+        assert_eq!(r, vec!["foo"]);
+    }
+
+    #[test]
+    fn test_ts_none() {
+        assert_eq!(ts(None), None);
+    }
+
+    #[test]
+    fn test_ts_some() {
+        let t = ts(Some(1_000_000));
+        assert!(t.is_some());
+    }
+
+    #[test]
+    fn test_http_agent_is_cached() {
+        let a = http();
+        let b = http();
+        assert!(std::ptr::eq(a, b));
     }
 }

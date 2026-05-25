@@ -7,3 +7,4 @@ edition.workspace = true
 domain = { path = "../domain" }
 regex.workspace = true
 nix.workspace = true
+parking_lot.workspace = true
