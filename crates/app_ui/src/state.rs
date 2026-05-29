@@ -23,7 +23,7 @@ impl Default for SortMode {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppState {
     pub query: String,
 

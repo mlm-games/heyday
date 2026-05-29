@@ -439,10 +439,10 @@ pub fn root_view(store: Rc<Store>) -> View {
             divider(),
             search_section(&store, &s),
             Space(Modifier::new().height(8.0)),
-            Row(Modifier::new().fill_max_width()).child((
-                Box(Modifier::new().flex_grow(3.0).padding(4.0)).child(results_list(&store, &s)),
+            Row(Modifier::new().fill_max_width().flex_grow(1.0).flex_basis(0.0)).child((
+                Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
                 Space(Modifier::new().width(8.0)),
-                Box(Modifier::new().flex_grow(3.0).padding(4.0))
+                Box(Modifier::new().weight(3.0).padding(4.0))
                     .child(details_pane(store.clone(), &s)),
             )),
             status_bar(&store, &s),

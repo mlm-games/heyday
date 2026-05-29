@@ -21,7 +21,7 @@ pub struct PackageId {
     pub source: Source,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PackageSummary {
     pub id: PackageId,
     pub version: String,
@@ -31,7 +31,7 @@ pub struct PackageSummary {
     pub last_updated: Option<SystemTime>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PackageDetails {
     pub summary: PackageSummary,
     pub depends: Vec<String>,

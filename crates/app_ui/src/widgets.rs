@@ -144,6 +144,8 @@ pub fn detail_row(label: &str, value: &str) -> View {
         Text(value.to_string())
             .size(FONT_SM)
             .color(Color::from_hex(TEXT_SECONDARY))
+            .max_lines(3)
+            .overflow_ellipsize()
             .modifier(Modifier::new().flex_grow(1.0)),
     ))
 }
@@ -170,7 +172,7 @@ pub fn tag_list(label: &str, items: &[String]) -> View {
                 bottom: 6.0,
             })),
         // Simple wrapping: show them in rows. LazyColumn not needed for ≤30 deps.
-        Row(Modifier::new().fill_max_width()).child(
+        Row(Modifier::new().fill_max_width().flex_wrap(FlexWrap::Wrap)).child(
             items
                 .iter()
                 .take(30)
