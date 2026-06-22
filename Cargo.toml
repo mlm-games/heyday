@@ -38,6 +38,7 @@ repose-platform = { version = "0.19.0" }
 repose-material = "0.19.0"
 alpm = "5.0.2"
 serde_json = "1"
+strsim = "0.11"
 
 
 # [patch.crates-io]

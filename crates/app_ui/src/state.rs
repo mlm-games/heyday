@@ -49,6 +49,25 @@ pub struct AppState {
     pub active_stage: Option<Stage>,
     /// Current progress fraction (0.0–1.0), if known.
     pub progress_pct: Option<f32>,
+
+    /// Pending PKGBUILD review dialog state.
+    pub pending_pkgbuild_review: Option<PkgbuildReview>,
+
+    /// Operation history entries.
+    pub history: Vec<HistoryEntry>,
+
+    /// Set to true to trigger a file dialog for local package install (main loop handles).
+    pub install_local_requested: bool,
+
+    /// Cache clean dialog: number of versions to keep (None = dialog closed).
+    pub cache_keep_requested: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PkgbuildReview {
+    pub id: PackageId,
+    pub content: String,
+    pub token: PkgbuildToken,
 }
 
 impl AppState {
@@ -121,11 +140,19 @@ pub enum Action {
     ToggleFilterInstalled,
     SetSort(SortMode),
     ToggleLog,
+    ApprovePkgbuild,
+    RejectPkgbuild,
+    InstallLocal,
+    ShowDowngrade(PackageId),
+    Downgrade(PackageId, String),
+    CleanCache(u32),
+    ShowHistory,
+    HideHistory,
 }
 
 pub struct Store {
     pub state: Signal<AppState>,
-    tx_jobs: chan::Sender<domain::Job>,
+    pub tx_jobs: chan::Sender<domain::Job>,
     next_id: AtomicU64,
     pub snackbar: Option<SnackbarController>,
 }
@@ -151,7 +178,7 @@ impl Store {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
-    fn send_job(&self, kind: JobKind, payload: JobPayload) {
+    pub fn send_job(&self, kind: JobKind, payload: JobPayload) {
         let _ = self.tx_jobs.send(Job {
             id: self.jid(),
             kind,
@@ -324,6 +351,21 @@ impl Store {
                 Event::SystemChanged => {
                     self.refresh_current_view(&s);
                 }
+                Event::PkgbuildContent {
+                    id: pkg_id,
+                    content,
+                    token,
+                } => {
+                    // Store the pending review info for the dialog to pick up
+                    s.pending_pkgbuild_review = Some(PkgbuildReview {
+                        id: pkg_id,
+                        content,
+                        token,
+                    });
+                }
+                Event::CachedVersions { .. } | Event::HistoryEntries(_) => {
+                    // Handled by dedicated action dispatch
+                }
             },
 
             Action::Select(id) => {
@@ -357,6 +399,39 @@ impl Store {
             }
 
             Action::ToggleLog => s.log_expanded = !s.log_expanded,
+
+            Action::ApprovePkgbuild => {
+                if let Some(review) = s.pending_pkgbuild_review.take() {
+                    review.token.approve();
+                }
+            }
+            Action::RejectPkgbuild => {
+                if let Some(review) = s.pending_pkgbuild_review.take() {
+                    review.token.reject();
+                }
+            }
+            Action::InstallLocal => {
+                s.install_local_requested = true;
+            }
+            Action::ShowDowngrade(_id) => {
+                // Will be handled externally
+            }
+            Action::Downgrade(id, version) => {
+                self.send_job(
+                    JobKind::Downgrade,
+                    JobPayload::DowngradeVersion { id, version },
+                );
+            }
+            Action::CleanCache(keep) => {
+                s.cache_keep_requested = false;
+                self.send_job(JobKind::CacheClean, JobPayload::CacheCleanCount(keep));
+            }
+            Action::ShowHistory => {
+                self.send_job(JobKind::History, JobPayload::None);
+            }
+            Action::HideHistory => {
+                s.history.clear();
+            }
         }
         self.state.set(s);
     }

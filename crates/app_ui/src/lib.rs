@@ -35,12 +35,14 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             top: 12.0,
             bottom: 12.0,
         }))
-    .child((
+    .child(vec![
+        // Title
         Text(title)
             .size(FONT_2XL)
             .color(Color::from_hex(TEXT_PRIMARY))
             .modifier(Modifier::new().align_self_center()),
         Spacer(),
+        // Upgrade all button (only in upgrades view)
         if s.in_upgrades_view && !s.results.is_empty() {
             success_button("Upgrade all", {
                 let store = store.clone();
@@ -49,17 +51,31 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
         } else {
             Box(Modifier::new())
         },
-        Space(Modifier::new().width(8.0)),
+        Space(Modifier::new().width(6.0)),
+        // Install local package
+        secondary_button("Install .pkg", {
+            let store = store.clone();
+            move || store.dispatch(Action::InstallLocal)
+        }),
+        Space(Modifier::new().width(6.0)),
+        // Refresh
         secondary_button("Refresh", {
             let store = store.clone();
             move || store.dispatch(Action::Refresh)
         }),
-        Space(Modifier::new().width(8.0)),
+        Space(Modifier::new().width(6.0)),
+        // Upgrades button
         primary_button("Upgrades", {
             let store = store.clone();
             move || store.dispatch(Action::Upgrades)
         }),
-    ))
+        Space(Modifier::new().width(6.0)),
+        // Cache clean
+        secondary_button("Cache", {
+            let store = store.clone();
+            move || store.dispatch(Action::CleanCache(3))
+        }),
+    ])
 }
 
 fn search_section(store: &Rc<Store>, s: &AppState) -> View {
@@ -320,14 +336,24 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
         top: 12.0,
         bottom: 4.0,
     }))
-    .child((
+    .child(vec![
         pkg_action(&store, &summary, s.in_upgrades_view),
+        Space(Modifier::new().width(8.0)),
+        if summary.installed {
+            secondary_button("Downgrade", {
+                let store = store.clone();
+                let id = summary.id.clone();
+                move || store.dispatch(Action::ShowDowngrade(id.clone()))
+            })
+        } else {
+            Box(Modifier::new())
+        },
         Space(Modifier::new().width(8.0)),
         secondary_button("Clear", {
             let store = store.clone();
             move || store.dispatch(Action::ClearSelection)
         }),
-    ));
+    ]);
 
     let detail_section: View = if let Some(det) = &s.detail {
         details_body(det)
@@ -465,8 +491,143 @@ fn log_panel(s: &AppState) -> View {
     )
 }
 
+fn pkgbuild_review_dialog(store: &Rc<Store>, s: &AppState) -> View {
+    let Some(ref review) = s.pending_pkgbuild_review else {
+        return Box(Modifier::new());
+    };
+
+    let scroll = remember_scroll_state("pkgbuild_review");
+
+    Surface(
+        SurfaceConfig {
+            modifier: Modifier::new()
+                .fill_max_size()
+                .background(Color::from_hex("#000000BB")),
+            ..Default::default()
+        },
+        || {
+            Column(
+                Modifier::new()
+                    .fill_max_size()
+                    .padding(32.0)
+                    .align_self_center()
+                    .max_width(700.0)
+                    .max_height(600.0),
+            )
+            .child((
+                Text("Review PKGBUILD")
+                    .size(FONT_XL)
+                    .color(Color::from_hex(TEXT_PRIMARY))
+                    .modifier(Modifier::new().padding_values(PaddingValues {
+                        left: 0.0,
+                        right: 0.0,
+                        top: 0.0,
+                        bottom: 12.0,
+                    })),
+                Text(format!("Package: {}", review.id.name))
+                    .size(FONT_SM)
+                    .color(Color::from_hex(TEXT_DIMMED))
+                    .modifier(Modifier::new().padding_values(PaddingValues {
+                        left: 0.0,
+                        right: 0.0,
+                        top: 0.0,
+                        bottom: 12.0,
+                    })),
+                ScrollArea(
+                    Modifier::new()
+                        .fill_max_width()
+                        .flex_grow(1.0)
+                        .background(Color::from_hex(CARD_SURFACE))
+                        .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                        .clip_rounded(R_MD)
+                        .padding(12.0),
+                    scroll,
+                    Text(review.content.clone())
+                        .size(12.0)
+                        .color(Color::from_hex(LOG_TEXT))
+                        .modifier(Modifier::new().fill_max_width()),
+                ),
+                Space(Modifier::new().height(12.0)),
+                Row(Modifier::new().fill_max_width()).child((
+                    Spacer(),
+                    danger_button("Reject", {
+                        let store = store.clone();
+                        move || store.dispatch(Action::RejectPkgbuild)
+                    }),
+                    Space(Modifier::new().width(8.0)),
+                    success_button("Approve", {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ApprovePkgbuild)
+                    }),
+                )),
+            ))
+        },
+    )
+}
+
+fn history_panel(s: &AppState) -> View {
+    if s.history.is_empty() {
+        return Box(Modifier::new());
+    }
+
+    let scroll = remember_scroll_state("history_panel");
+
+    Column(
+        Modifier::new()
+            .fill_max_width()
+            .padding(8.0)
+            .background(Color::from_hex(CARD_BG))
+            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+            .clip_rounded(R_MD),
+    )
+    .child(ScrollArea(
+        Modifier::new()
+            .fill_max_width()
+            .max_height(200.0)
+            .padding(4.0),
+        scroll,
+        Column(Modifier::new().fill_max_width()).child(
+            s.history
+                .iter()
+                .map(|entry| {
+                    let status_color = if entry.success { GREEN } else { RED };
+                    Row(
+                        Modifier::new()
+                            .fill_max_width()
+                            .padding(4.0)
+                            .margin_vertical(2.0),
+                    )
+                    .child(vec![
+                        Text(entry.kind.clone())
+                            .size(FONT_XS)
+                            .color(Color::from_hex(TEXT_DIMMED))
+                            .modifier(Modifier::new().width(70.0)),
+                        Text(entry.pkg.clone().unwrap_or_default())
+                            .size(FONT_XS)
+                            .color(Color::from_hex(TEXT_MUTED))
+                            .modifier(Modifier::new().width(120.0)),
+                        Text(if entry.success { "OK" } else { "FAIL" })
+                            .size(FONT_XS)
+                            .color(Color::from_hex(status_color)),
+                        Text(entry.message.clone())
+                            .size(FONT_XS)
+                            .color(Color::from_hex(TEXT_DIMMED))
+                            .modifier(Modifier::new().flex_grow(1.0).max_width(200.0))
+                            .overflow_ellipsize(),
+                    ])
+                })
+                .collect::<Vec<_>>(),
+        ),
+    ))
+}
+
 pub fn root_view(store: Rc<Store>) -> View {
     let s = store.state.get();
+
+    // If PKGBUILD review is pending, show only the dialog
+    if s.pending_pkgbuild_review.is_some() {
+        return pkgbuild_review_dialog(&store, &s);
+    }
 
     Surface(
         SurfaceConfig {
@@ -493,6 +654,11 @@ pub fn root_view(store: Rc<Store>) -> View {
                 )),
                 status_bar(&store, &s),
                 log_panel(&s),
+                if !s.history.is_empty() {
+                    history_panel(&s)
+                } else {
+                    Box(Modifier::new())
+                },
             ))
         },
     )

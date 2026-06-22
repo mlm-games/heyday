@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process;
 
 use alpm::{Alpm, AnyQuestion, Question, SigLevel, TransFlag};
@@ -79,6 +80,13 @@ fn main() {
                 cmd_remove(&mut handle, pkgname)
             }
             "sysupgrade" => cmd_sysupgrade(&mut handle),
+            "cache-clean" => {
+                let keep = args
+                    .get(2)
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(3);
+                cmd_cache_clean(keep)
+            }
             other => Err(format!("unknown command: {other}")),
         }
     })();
@@ -246,6 +254,49 @@ fn cmd_sysupgrade(handle: &mut Alpm) -> Result<(), String> {
 
     handle.trans_release().ok();
     r
+}
+
+const PACMAN_CACHE: &str = "/var/cache/pacman/pkg";
+
+fn cmd_cache_clean(keep: u32) -> Result<(), String> {
+    let dir = Path::new(PACMAN_CACHE);
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let read_dir = fs::read_dir(dir).map_err(|e| format!("read cache dir: {e}"))?;
+    for entry in read_dir.flatten() {
+        let fname = entry.file_name().to_string_lossy().to_string();
+        if fname.ends_with(".pkg.tar.zst") {
+            entries.push((fname, entry.path()));
+        }
+    }
+
+    // Group by package name (strip everything after first '-' after the name prefix)
+    let mut groups: HashMap<String, Vec<(String, std::path::PathBuf)>> = HashMap::new();
+    for (fname, path) in entries {
+        let pkg_name = fname
+            .rsplitn(2, '-')
+            .nth(1)
+            .and_then(|s| s.rsplitn(2, '-').nth(1))
+            .unwrap_or(&fname)
+            .to_string();
+        groups.entry(pkg_name).or_default().push((fname, path));
+    }
+
+    let mut removed = 0u32;
+    for (_name, mut pkgs) in groups {
+        if pkgs.len() <= keep as usize {
+            continue;
+        }
+        // Sort by version descending (simple string comparison, good enough for cache clean)
+        pkgs.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, p) in pkgs.iter().skip(keep as usize) {
+            if fs::remove_file(p).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+
+    emit_progress_stage("cleaning", None, None, Some(&format!("removed {removed} cached files")), false);
+    Ok(())
 }
 
 fn auto_answer(mut question: AnyQuestion) {

@@ -17,6 +17,7 @@ use tar::Archive;
 use domain::*;
 
 const PACMAN_DB: &str = "/var/lib/pacman";
+const PACMAN_CACHE: &str = "/var/cache/pacman/pkg";
 const HELPER_BIN: &str = "pacman-helper";
 
 fn parse_json_stage(s: Option<&str>) -> Stage {
@@ -372,6 +373,99 @@ impl PacmanCli {
     }
 }
 
+impl PacmanCli {
+    pub fn install_local(
+        &self,
+        path: &str,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        let _ = sink.send(Progress {
+            job_id: 0,
+            stage: Stage::Installing,
+            percent: None,
+            bytes: None,
+            log: Some(format!("installing from local file: {path}")),
+            warning: false,
+        });
+        self.fallback_pacman(&["-U", "--noconfirm", path], Stage::Installing, sink, cancel)
+    }
+
+    pub fn cached_versions(name: &str) -> Vec<(String, String)> {
+        let dir = Path::new(PACMAN_CACHE);
+        let mut versions = Vec::new();
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return versions,
+        };
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with(&format!("{name}-")) && fname.ends_with(".pkg.tar.zst") {
+                let ver = fname
+                    .strip_prefix(&format!("{name}-"))
+                    .and_then(|s| s.rsplit_once('-'))
+                    .map(|(v, _)| v.to_string())
+                    .unwrap_or_default();
+                if !ver.is_empty() {
+                    versions.push((fname, ver));
+                }
+            }
+        }
+        versions.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+        versions
+    }
+
+    pub fn cache_clean(
+        &self,
+        keep: u32,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        let _ = sink.send(Progress {
+            job_id: 0,
+            stage: Stage::Cleaning,
+            percent: None,
+            bytes: None,
+            log: Some(format!("cleaning cache, keeping {keep} versions")),
+            warning: false,
+        });
+        let r = self.try_run_helper(&["cache-clean", &keep.to_string()], Stage::Cleaning, sink, cancel);
+        match r {
+            Ok(()) => Ok(()),
+            Err(Some(e)) => {
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Cleaning,
+                    percent: None,
+                    bytes: None,
+                    log: Some(format!("helper unavailable ({e}); fallback not implemented")),
+                    warning: true,
+                });
+                Err(Error::Alpm(format!("cache clean failed: {e}")))
+            }
+            Err(None) => Err(Error::Cancelled),
+        }
+    }
+
+    pub fn install_downgrade(
+        &self,
+        name: &str,
+        version: &str,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        let path = format!("{PACMAN_CACHE}/{name}-{version}-{}.pkg.tar.zst", std::env::consts::ARCH);
+        if !Path::new(&path).exists() {
+            let path_any = format!("{PACMAN_CACHE}/{name}-{version}-any.pkg.tar.zst");
+            if Path::new(&path_any).exists() {
+                return self.install_local(&path_any, sink, cancel);
+            }
+            return Err(Error::Alpm(format!("cached package not found: {path}")));
+        }
+        self.install_local(&path, sink, cancel)
+    }
+}
+
 impl PackageBackend for PacmanCli {
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let r = self.try_run_helper(
@@ -673,5 +767,21 @@ impl PackageBackend for PacmanCli {
             }
             Err(None) => Err(Error::Cancelled),
         }
+    }
+
+    fn cached_versions(&self, name: &str) -> Vec<(String, String)> {
+        Self::cached_versions(name)
+    }
+
+    fn install_local(&self, path: &str, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        self.install_local(path, sink, cancel)
+    }
+
+    fn install_downgrade(&self, name: &str, version: &str, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        self.install_downgrade(name, version, sink, cancel)
+    }
+
+    fn cache_clean(&self, keep: u32, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        self.cache_clean(keep, sink, cancel)
     }
 }

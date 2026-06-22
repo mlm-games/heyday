@@ -1231,6 +1231,7 @@ version = "0.3.3"
 dependencies = [
  "crossbeam-channel",
  "parking_lot",
+ "strsim",
  "thiserror 2.0.18",
 ]
 

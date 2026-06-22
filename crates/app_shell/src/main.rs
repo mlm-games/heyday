@@ -33,19 +33,18 @@ fn main() -> anyhow::Result<()> {
 
     let repo_backend: Arc<dyn PackageBackend> = Arc::new(PacmanCli::new());
     let aur_backend: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
-    Executor::new(
-        repo_backend,
+    let executor = Executor::new(
+        repo_backend.clone(),
         aur_backend,
         tx_prog.clone(),
         tx_evt.clone(),
         rx_jobs,
-    )
-    .run();
+    );
 
     let overlay = OverlayHandle::new();
     let snackbar = SnackbarController::new(overlay.clone());
 
-    let store = Rc::new(Store::new(tx_jobs, Some(snackbar.clone())));
+    let store = Rc::new(Store::new(tx_jobs.clone(), Some(snackbar.clone())));
 
     {
         spawn(move || {
@@ -65,7 +64,6 @@ fn main() -> anyhow::Result<()> {
                         }
                     };
 
-                    // Only react to meaningful changes.
                     let is_meaningful_kind = matches!(
                         ev.kind,
                         EventKind::Create(CreateKind::Folder)
@@ -75,10 +73,9 @@ fn main() -> anyhow::Result<()> {
                             | EventKind::Remove(RemoveKind::File)
                     );
                     if !is_meaningful_kind {
-                        return; // ignore Access/Metadata/etc.
+                        return;
                     }
 
-                    // Only if paths are under the local DB and relevant:
                     let relevant = ev.paths.iter().any(|p| {
                         if !p.starts_with(LOCAL_DB) {
                             return false;
@@ -86,15 +83,13 @@ fn main() -> anyhow::Result<()> {
                         match ev.kind {
                             EventKind::Create(CreateKind::Folder)
                             | EventKind::Remove(RemoveKind::Folder) => {
-                                // Only act on directories directly under .../local (pkg-version dirs)
                                 p.parent()
                                     .map(|pp| pp == Path::new(LOCAL_DB))
                                     .unwrap_or(false)
                             }
-                            EventKind::Modify(ModifyKind::Name(_)) => true, // rename within tree
+                            EventKind::Modify(ModifyKind::Name(_)) => true,
                             EventKind::Create(CreateKind::File)
                             | EventKind::Remove(RemoveKind::File) => {
-                                // Strict, only desc file
                                 p.file_name().is_some_and(|f| f == "desc")
                             }
                             _ => false,
@@ -104,26 +99,60 @@ fn main() -> anyhow::Result<()> {
                         return;
                     }
 
-                    // Debounce
                     let now = Instant::now();
                     if now.duration_since(last) >= cooldown {
                         last = now;
                         let _ = tx_watch.send(());
                     }
                 })
-                .expect("watcher failed — check inotify limits (/proc/sys/fs/inotify/max_user_watches)");
+                .expect("watcher failed — check inotify limits");
 
-            // Watch the local DB (recursive to see renames and file-level events as needed)
             if let Err(e) = watcher.watch(Path::new(LOCAL_DB), RecursiveMode::Recursive) {
                 error!("package DB watcher failed to start: {e}");
                 return;
             }
-            // Keep thread alive indefinitely.
             std::thread::park();
         });
     }
 
+    executor.run();
+
+    fn pick_file_via_zenity() -> Option<String> {
+        let out = std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title",
+                "Select package file",
+                "--file-filter",
+                "Package files (*.pkg.tar.zst *.pkg.tar.gz *.pkg.tar.xz) | *.pkg.tar.zst *.pkg.tar.gz *.pkg.tar.xz",
+            ])
+            .output()
+            .ok()?;
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path.is_empty() { Some(path) } else { None }
+        } else {
+            None
+        }
+    }
+
     run_desktop_app(move |_sched, _ctx| {
+        // Handle file dialog trigger
+        {
+            let mut s = store.state.get();
+            if s.install_local_requested {
+                s.install_local_requested = false;
+                store.state.set(s.clone());
+                if let Some(path) = pick_file_via_zenity() {
+                    store.send_job(
+                        domain::JobKind::InstallLocal,
+                        domain::JobPayload::InstallLocalFile(path),
+                    );
+                }
+                store.state.set(s);
+            }
+        }
+
         while let Ok(p) = rx_prog.try_recv() {
             store.dispatch(Action::Progress(p));
         }

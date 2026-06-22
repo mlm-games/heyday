@@ -354,8 +354,51 @@ impl PackageBackend for AurBackend {
     }
 
     fn upgrade_all(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
-        // Minimal first step: do nothing. We can iterate available AUR upgrades later.
         Ok(())
+    }
+
+    fn review_pkgbuild(
+        &self,
+        id: &PackageId,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<String> {
+        let send_log = |stage: Stage, msg: &str, warning: bool| {
+            let _ = sink.send(Progress {
+                job_id: 0,
+                stage,
+                percent: None,
+                bytes: None,
+                log: Some(msg.into()),
+                warning,
+            });
+        };
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        send_log(Stage::Building, &format!("cloning {}.git for review", id.name), false);
+
+        let work = tempfile::tempdir().map_err(|e| Error::Internal(e.to_string()))?;
+        let dir = work.path().join(&id.name);
+        let dir_str = dir.to_str().ok_or_else(|| Error::Internal("non-UTF-8 path".into()))?.to_string();
+
+        let status = Command::new("git")
+            .args(["clone", "--depth=1", &format!("https://aur.archlinux.org/{}.git", id.name), &dir_str])
+            .status()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        if !status.success() {
+            return Err(Error::Aur("git clone failed".into()));
+        }
+
+        let pkgbuild = dir.join("PKGBUILD");
+        let content = std::fs::read_to_string(&pkgbuild)
+            .map_err(|e| Error::Internal(format!("read PKGBUILD: {e}")))?;
+
+        send_log(Stage::Verifying, "PKGBUILD fetched — review sent to UI", false);
+
+        Ok(content)
     }
 }
 
