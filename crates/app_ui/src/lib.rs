@@ -18,6 +18,7 @@ use repose_ui::{
     scroll::{ScrollArea, remember_scroll_state},
     *,
 };
+use repose_material::{Icon, Symbol};
 use std::rc::Rc;
 
 pub mod state;
@@ -73,6 +74,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                 OutlinedTextFieldConfig {
                     placeholder: Some("Search packages…".into()),
                     single_line: true,
+                    leading_icon: Some(Icon(Symbol::new("search", '\u{E8B6}'))),
                     on_submit: Some(Rc::new({
                         let store = store.clone();
                         move |text| {
@@ -452,8 +454,9 @@ pub fn root_view(store: Rc<Store>) -> View {
 
     Surface(
         SurfaceConfig {
-            modifier: Modifier::new().fill_max_size(),
-            color: theme().background,
+            modifier: Modifier::new()
+                .fill_max_size()
+                .background_brush(v_gradient(BG_START, BG_END)),
             ..Default::default()
         },
         {
