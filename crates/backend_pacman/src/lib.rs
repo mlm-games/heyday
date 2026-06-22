@@ -1,285 +1,120 @@
-use domain::*;
-use parking_lot::Mutex;
-use regex::Regex;
 use std::{
-    io::{BufRead, BufReader},
+    collections::{HashMap, HashSet},
+    fs,
+    io::{BufRead, BufReader, Read},
+    path::Path,
     process::{Command, Stdio},
-    sync::{Arc, LazyLock},
+    str::FromStr,
+    sync::Arc,
 };
 
+use alpm_db::desc::DbDescFileV2;
+use alpm_repo_db::desc::RepoDescFileV2;
+use flate2::read::GzDecoder;
+use parking_lot::Mutex;
+use tar::Archive;
+
+use domain::*;
+
+const PACMAN_DB: &str = "/var/lib/pacman";
+
 pub struct PacmanCli;
+
 impl Default for PacmanCli {
     fn default() -> Self {
         Self::new()
     }
 }
+
 impl PacmanCli {
     pub fn new() -> Self {
         Self
     }
 
-    fn parse_upgrades(out: &str) -> Vec<PackageSummary> {
-        // Lines look like: "pkgname oldver -> newver"
-        static RE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"^(?P<name>\S+)\s+\S+\s+->\s+(?P<new>\S+)").unwrap());
-        out.lines()
-            .filter_map(|l| {
-                RE.captures(l).map(|c| PackageSummary {
-                    id: PackageId {
-                        name: c["name"].to_string(),
-                        source: Source::Repo,
-                    },
-                    version: c["new"].to_string(),
-                    description: String::new(),
-                    installed: true,
-                    popular: None,
-                    last_updated: None,
-                })
-            })
-            .collect()
+    fn read_local_db() -> HashMap<String, DbDescFileV2> {
+        let local_dir = Path::new(PACMAN_DB).join("local");
+        let mut packages = HashMap::new();
+        let dir = match fs::read_dir(&local_dir) {
+            Ok(d) => d,
+            Err(_) => return packages,
+        };
+        for entry in dir.flatten() {
+            let pkg_dir = entry.path();
+            if !pkg_dir.is_dir() {
+                continue;
+            }
+            let desc_path = pkg_dir.join("desc");
+            let content = match fs::read_to_string(&desc_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Ok(desc) = DbDescFileV2::from_str(&content) {
+                packages.insert(desc.name.to_string(), desc);
+            }
+        }
+        packages
     }
 
-    fn search_fallback_names(&self, q: &str, sink: &ProgressSink) -> Result<Vec<PackageSummary>> {
-        let installed = installed_package_names();
-        let out = match std::process::Command::new("pacman")
-            .args(["-Ssq", q])
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
-                sink.send(Progress {
-                    job_id: 0,
-                    stage: Stage::Searching,
-                    percent: None,
-                    bytes: None,
-                    log: Some(format!("repo: fallback -Ssq spawn failed: {e}")),
-                    warning: true,
-                })
-                .ok();
-                return Ok(vec![]);
-            }
+    fn read_sync_db(repo_path: &Path) -> HashMap<String, RepoDescFileV2> {
+        let file = match fs::File::open(repo_path) {
+            Ok(f) => f,
+            Err(_) => return HashMap::new(),
+        };
+        let decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(decoder);
+        let mut packages = HashMap::new();
+
+        let entries = match archive.entries() {
+            Ok(e) => e,
+            Err(_) => return packages,
         };
 
-        if !out.status.success() {
-            sink.send(Progress {
-                job_id: 0,
-                stage: Stage::Searching,
-                percent: None,
-                bytes: None,
-                log: Some(format!(
-                    "repo: fallback -Ssq failed (exit {}), returning no repo items",
-                    out.status.code().unwrap_or(-1)
-                )),
-                warning: true,
-            })
-            .ok();
-            return Ok(vec![]);
-        }
-
-        let names = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .take(500) // avoid huge UI floods
-            .map(|name| PackageSummary {
-                id: PackageId {
-                    name: name.to_string(),
-                    source: Source::Repo,
-                },
-                version: String::new(),
-                description: String::new(),
-                installed: installed.contains(name),
-                popular: None,
-                last_updated: None,
-            })
-            .collect::<Vec<_>>();
-
-        if names.is_empty() {
-            sink.send(Progress {
-                job_id: 0,
-                stage: Stage::Searching,
-                percent: None,
-                bytes: None,
-                log: Some("repo: fallback -Ssq returned 0 matches".into()),
-                warning: false,
-            })
-            .ok();
-        } else {
-            sink.send(Progress {
-                job_id: 0,
-                stage: Stage::Searching,
-                percent: None,
-                bytes: None,
-                log: Some(format!("repo: fallback -Ssq yielded {} names", names.len())),
-                warning: false,
-            })
-            .ok();
-        }
-
-        Ok(names)
-    }
-}
-
-/// parsing for -Ss
-fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
-    static RE_HEAD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?P<repo>\S+)/(?P<name>\S+)\s+(?P<ver>\S+)(?:\s+\[installed.*\])?\s*$")
-            .unwrap()
-    });
-    static RE_INST: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\[installed").unwrap());
-    let mut res = Vec::new();
-    let mut last: Option<PackageSummary> = None;
-    for line in out.lines() {
-        if let Some(c) = RE_HEAD.captures(line) {
-            let name = c["name"].to_string();
-            let ver = c["ver"].to_string();
-            let installed = RE_INST.is_match(line);
-            last = Some(PackageSummary {
-                id: PackageId {
-                    name,
-                    source: Source::Repo,
-                },
-                version: ver,
-                description: String::new(),
-                installed,
-                popular: None,
-                last_updated: None,
-            });
-        } else if line.starts_with(' ') || line.starts_with('\t') {
-            if let Some(mut s) = last.take() {
-                s.description = line.trim().to_string();
-                res.push(s);
+        for mut entry in entries.flatten() {
+            let path = match entry.path() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if !path.ends_with("desc") {
+                continue;
+            }
+            let mut content = String::new();
+            if entry.read_to_string(&mut content).is_err() {
+                continue;
+            }
+            if let Ok(desc) = RepoDescFileV2::from_str(&content) {
+                packages.insert(desc.name.to_string(), desc);
             }
         }
+        packages
     }
-    if let Some(s) = last.take() {
-        res.push(s);
-    }
-    res
-}
 
-/// parsing for -Si
-fn parse_pacman_details(out: &str, mut summary: PackageSummary) -> PackageDetails {
-    fn strip_ver_token(tok: &str) -> String {
-        tok.split(|c| c == '<' || c == '>' || c == '=')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string()
-    }
-    fn parse_pkg_list(s: &str) -> Vec<String> {
-        s.split_whitespace()
-            .filter_map(|t| {
-                let n = strip_ver_token(t);
-                if n.is_empty() || n == "None" {
-                    None
-                } else {
-                    Some(n)
-                }
-            })
-            .collect()
-    }
-    let mut depends = Vec::new();
-    let mut opt_depends = Vec::new();
-    let mut homepage = None;
-    let mut size_install = None;
-    let mut size_download = None;
-    let mut maintainer = None;
-    let mut in_dep = false;
-    let mut in_opt = false;
-
-    for raw in out.lines() {
-        let line = raw.trim_end();
-
-        if let Some(v) = line.strip_prefix("Depends On      :") {
-            in_dep = true;
-            in_opt = false;
-            let v = v.trim();
-            if v != "None" {
-                depends.extend(parse_pkg_list(v));
+    fn read_all_sync_dbs() -> HashMap<String, HashMap<String, RepoDescFileV2>> {
+        let sync_dir = Path::new(PACMAN_DB).join("sync");
+        let mut repos = HashMap::new();
+        let dir = match fs::read_dir(&sync_dir) {
+            Ok(d) => d,
+            Err(_) => return repos,
+        };
+        for entry in dir.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("db") {
+                continue;
             }
-            continue;
-        } else if let Some(v) = line.strip_prefix("Optional Deps   :") {
-            in_dep = false;
-            in_opt = true;
-            let v = v.trim();
-            if !v.is_empty() {
-                if let Some(name) = v.split(':').next() {
-                    let n = name.trim();
-                    if !n.is_empty() {
-                        opt_depends.push(n.to_string());
-                    }
-                }
-            }
-            continue;
-        } else if let Some(v) = line.strip_prefix("URL             :") {
-            homepage = Some(v.trim().to_string());
-            in_dep = false;
-            in_opt = false;
-        } else if let Some(v) = line.strip_prefix("Installed Size  :") {
-            size_install = Some(parse_size(v.trim()));
-            in_dep = false;
-            in_opt = false;
-        } else if let Some(v) = line.strip_prefix("Download Size   :") {
-            size_download = Some(parse_size(v.trim()));
-            in_dep = false;
-            in_opt = false;
-        } else if let Some(v) = line.strip_prefix("Packager        :") {
-            maintainer = Some(v.trim().to_string());
-            in_dep = false;
-            in_opt = false;
-        } else if let Some(v) = line.strip_prefix("Description     :") {
-            if summary.description.is_empty() {
-                summary.description = v.trim().to_string();
-            }
-        } else if let Some(v) = line.strip_prefix("Version         :") {
-            if summary.version.is_empty() {
-                summary.version = v.trim().to_string();
-            }
-        } else if line.starts_with(char::is_whitespace) {
-            // Continuations for previous key
-            let v = line.trim();
-            if in_dep && !v.is_empty() {
-                depends.extend(parse_pkg_list(v));
-            } else if in_opt && !v.is_empty() {
-                if let Some(name) = v.split(':').next() {
-                    let n = name.trim();
-                    if !n.is_empty() {
-                        opt_depends.push(n.to_string());
-                    }
-                }
-            }
-        } else {
-            // New field
-            in_dep = false;
-            in_opt = false;
+            let repo_name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let packages = Self::read_sync_db(&path);
+            repos.insert(repo_name, packages);
         }
+        repos
     }
 
-    PackageDetails {
-        summary,
-        depends,
-        opt_depends,
-        homepage,
-        maintainer,
-        size_install,
-        size_download,
+    fn installed_names() -> HashSet<String> {
+        Self::read_local_db().into_keys().collect()
     }
-}
 
-fn parse_size(s: &str) -> u64 {
-    let mut it = s.split_whitespace();
-    let n: f64 = it.next().unwrap_or("0").parse().unwrap_or(0.0);
-    match it.next().unwrap_or("B") {
-        "KiB" => (n * 1024.0) as u64,
-        "MiB" => (n * 1024.0 * 1024.0) as u64,
-        "GiB" => (n * 1024.0 * 1024.0 * 1024.0) as u64,
-        _ => n as u64,
-    }
-}
-
-impl PacmanCli {
     fn run_stream(
         &self,
         mut cmd: Command,
@@ -306,7 +141,8 @@ impl PacmanCli {
         let last_err_t2 = last_err.clone();
 
         let t1 = std::thread::spawn(move || {
-            for l in BufReader::new(out).lines().flatten() {
+            #[allow(clippy::lines_filter_map_ok)]
+            for l in BufReader::new(out).lines().filter_map(|r| r.ok()) {
                 let _ = tx1.send(Progress {
                     job_id: jid,
                     stage: stage_out.clone(),
@@ -319,7 +155,8 @@ impl PacmanCli {
         });
 
         let t2 = std::thread::spawn(move || {
-            for l in BufReader::new(err).lines().flatten() {
+            #[allow(clippy::lines_filter_map_ok)]
+            for l in BufReader::new(err).lines().filter_map(|r| r.ok()) {
                 {
                     let mut g = last_err_t2.lock();
                     *g = Some(l.clone());
@@ -378,6 +215,7 @@ impl PackageBackend for PacmanCli {
             Err(Error::Priv(format!("install exit {code}{why}")))
         }
     }
+
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let try_pkexec = || -> Result<()> {
             let mut cmd = Command::new("pkexec");
@@ -394,7 +232,6 @@ impl PackageBackend for PacmanCli {
         match try_pkexec() {
             Ok(()) => Ok(()),
             Err(Error::Internal(e)) if e.contains("spawn:") => {
-                // pkexec missing or cannot spawn. Explain and try unprivileged -Sy (may still fail).
                 let _ = sink.send(Progress {
                     job_id: 0,
                     stage: Stage::Refreshing,
@@ -449,79 +286,59 @@ impl PackageBackend for PacmanCli {
         })
         .ok();
 
-        // 1) Try -Ss first
-        let out = match std::process::Command::new("pacman")
-            .args(["-Ss", "--color", "never", q])
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
-                sink.send(Progress {
-                    job_id: 0,
-                    stage: Stage::Searching,
-                    percent: None,
-                    bytes: None,
-                    log: Some(format!(
-                        "repo: failed to spawn pacman -Ss: {e} (falling back to -Ssq)"
-                    )),
-                    warning: true,
-                })
-                .ok();
-                return self.search_fallback_names(q, sink);
+        let q_lower = q.to_lowercase();
+        let installed = Self::installed_names();
+        let sync_dbs = Self::read_all_sync_dbs();
+
+        let mut results: Vec<PackageSummary> = Vec::new();
+
+        for packages in sync_dbs.values() {
+            for pkg in packages.values() {
+                let name_lower = pkg.name.to_string().to_lowercase();
+                let desc_lower = pkg.description.to_string().to_lowercase();
+
+                if name_lower.contains(&q_lower) || desc_lower.contains(&q_lower) {
+                    results.push(PackageSummary {
+                        id: PackageId {
+                            name: pkg.name.to_string(),
+                            source: Source::Repo,
+                        },
+                        version: pkg.version.to_string(),
+                        description: pkg.description.to_string(),
+                        installed: installed.contains(pkg.name.to_string().as_str()),
+                        popular: None,
+                        last_updated: None,
+                    });
+                }
             }
-        };
-
-        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-
-        if out.status.success() {
-            // Happy path
-            return Ok(parse_pacman_search(&stdout));
         }
 
-        // 2) Status != 0. If we still got lines on stdout, parse them.
-        if !stdout.trim().is_empty() {
+        results.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+        results.truncate(500);
+
+        if results.is_empty() {
             sink.send(Progress {
                 job_id: 0,
                 stage: Stage::Searching,
                 percent: None,
                 bytes: None,
-                log: Some(format!(
-                    "repo: pacman -Ss exit {} but stdout has results; parsing anyway",
-                    out.status.code().unwrap_or(-1)
-                )),
-                warning: true,
+                log: Some("repo: search returned 0 matches".into()),
+                warning: false,
             })
             .ok();
-            return Ok(parse_pacman_search(&stdout));
+        } else {
+            sink.send(Progress {
+                job_id: 0,
+                stage: Stage::Searching,
+                percent: None,
+                bytes: None,
+                log: Some(format!("repo: search yielded {} matches", results.len())),
+                warning: false,
+            })
+            .ok();
         }
 
-        // stderr-only failure: explain and fall back to -Ssq
-        let looks_like_db = stderr.contains("database")
-            || stderr.contains("failed to synchronize")
-            || stderr.contains("failed to update");
-        let msg = if looks_like_db {
-            "repo: pacman -Ss failed — repository database error. You can try Refresh (pacman -Sy) and search again."
-            .to_string()
-        } else {
-            format!(
-                "repo: pacman -Ss failed (exit {}): {}",
-                out.status.code().unwrap_or(-1),
-                stderr.trim()
-            )
-        };
-        sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Searching,
-            percent: None,
-            bytes: None,
-            log: Some(msg + " (falling back to -Ssq)"),
-            warning: true,
-        })
-        .ok();
-
-        // 3) Fallback to -Ssq (names only)
-        self.search_fallback_names(q, sink)
+        Ok(results)
     }
 
     fn details(
@@ -530,23 +347,37 @@ impl PackageBackend for PacmanCli {
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<PackageDetails> {
-        let out = Command::new("pacman")
-            .args(["-Si", &id.name])
-            .output()
-            .map_err(|e| Error::Internal(e.to_string()))?;
-        if !out.status.success() {
-            return Err(Error::Alpm("pacman -Si failed".into()));
+        let sync_dbs = Self::read_all_sync_dbs();
+
+        for packages in sync_dbs.values() {
+            if let Some(pkg) = packages.get(&id.name) {
+                return Ok(PackageDetails {
+                    summary: PackageSummary {
+                        id: id.clone(),
+                        version: pkg.version.to_string(),
+                        description: pkg.description.to_string(),
+                        installed: false,
+                        popular: None,
+                        last_updated: None,
+                    },
+                    depends: pkg.dependencies.iter().map(|d| d.to_string()).collect(),
+                    opt_depends: pkg
+                        .optional_dependencies
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect(),
+                    homepage: pkg.url.as_ref().map(|u| u.to_string()),
+                    maintainer: Some(pkg.packager.to_string()),
+                    size_install: Some(pkg.installed_size),
+                    size_download: Some(pkg.compressed_size),
+                });
+            }
         }
-        let s = String::from_utf8_lossy(&out.stdout);
-        let summary = PackageSummary {
-            id: id.clone(),
-            version: String::new(),
-            description: String::new(),
-            installed: false,
-            popular: None,
-            last_updated: None,
-        };
-        Ok(parse_pacman_details(&s, summary))
+
+        Err(Error::Alpm(format!(
+            "package {} not found in repos",
+            id.name
+        )))
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -562,31 +393,46 @@ impl PackageBackend for PacmanCli {
     }
 
     fn upgrades(&self, sink: &ProgressSink, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
-        // pacman -Qu does not require root and consults sync dbs for available updates
-        let out = Command::new("pacman")
-            .args(["-Qu", "--color", "never"])
-            .output()
-            .map_err(|e| Error::Internal(e.to_string()))?;
+        let local = Self::read_local_db();
+        let sync_dbs = Self::read_all_sync_dbs();
+        let mut results = Vec::new();
 
-        if !out.status.success() && out.stdout.is_empty() {
-            // Non-zero with no stdout usually means "no upgrades" or an error; treat as empty list.
+        for (name, local_pkg) in &local {
+            for sync_pkgs in sync_dbs.values() {
+                if let Some(sync_pkg) = sync_pkgs.get(name) {
+                    if sync_pkg.version > local_pkg.version {
+                        results.push(PackageSummary {
+                            id: PackageId {
+                                name: name.clone(),
+                                source: Source::Repo,
+                            },
+                            version: sync_pkg.version.to_string(),
+                            description: sync_pkg.description.to_string(),
+                            installed: true,
+                            popular: None,
+                            last_updated: None,
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+
+        results.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+
+        if results.is_empty() {
             sink.send(Progress {
                 job_id: 0,
                 stage: Stage::Verifying,
                 percent: None,
                 bytes: None,
-                log: Some(format!(
-                    "repo: pacman -Qu exit {} (treating as no upgrades (non synced))",
-                    out.status.code().unwrap_or(-1)
-                )),
-                warning: true,
+                log: Some("repo: no upgrades available".into()),
+                warning: false,
             })
             .ok();
-            return Ok(vec![]);
         }
 
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        Ok(Self::parse_upgrades(&stdout))
+        Ok(results)
     }
 
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -594,7 +440,6 @@ impl PackageBackend for PacmanCli {
     }
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        // Full system upgrade, as pacman documents (-Syu).
         let mut cmd = Command::new("pkexec");
         cmd.args(["pacman", "-Syu", "--noconfirm"]);
         let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
@@ -606,5 +451,3 @@ impl PackageBackend for PacmanCli {
         }
     }
 }
-
-
