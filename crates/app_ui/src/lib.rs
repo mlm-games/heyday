@@ -47,11 +47,6 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             Box(Modifier::new())
         },
         Space(Modifier::new().width(6.0)),
-        outline_button("Install .pkg", {
-            let store = store.clone();
-            move || store.dispatch(Action::InstallLocal)
-        }),
-        Space(Modifier::new().width(6.0)),
         outline_button("Refresh", {
             let store = store.clone();
             move || store.dispatch(Action::Refresh)
@@ -61,31 +56,6 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             let store = store.clone();
             move || store.dispatch(Action::Upgrades)
         }, ButtonConfig::default(), || Text("Upgrades").size(14.0)),
-        Space(Modifier::new().width(6.0)),
-        outline_button("Cache", {
-            let store = store.clone();
-            move || store.dispatch(Action::CleanCache(3))
-        }),
-        Space(Modifier::new().width(6.0)),
-        outline_button("Orphans", {
-            let store = store.clone();
-            move || store.dispatch(Action::ShowOrphans)
-        }),
-        Space(Modifier::new().width(6.0)),
-        outline_button("Export", {
-            let store = store.clone();
-            move || store.dispatch(Action::ShowExport)
-        }),
-        Space(Modifier::new().width(6.0)),
-        outline_button("Verify", {
-            let store = store.clone();
-            move || store.dispatch(Action::ShowVerify)
-        }),
-        Space(Modifier::new().width(6.0)),
-        outline_button(".pacnew", {
-            let store = store.clone();
-            move || store.dispatch(Action::ShowPacnew)
-        }),
     ])
 }
 
@@ -320,16 +290,6 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
     .child(vec![
         pkg_action(&store, &summary, s.in_upgrades_view),
         Space(Modifier::new().width(8.0)),
-        if summary.installed {
-            outline_button("Downgrade", {
-                let store = store.clone();
-                let id = summary.id.clone();
-                move || store.dispatch(Action::ShowDowngrade(id.clone()))
-            })
-        } else {
-            Box(Modifier::new())
-        },
-        Space(Modifier::new().width(8.0)),
         text_button("Clear", {
             let store = store.clone();
             move || store.dispatch(Action::ClearSelection)
@@ -374,7 +334,6 @@ fn details_body(det: &PackageDetails) -> View {
         detail_row("Maintainer", det.maintainer.as_deref().unwrap_or("unknown")),
         detail_row("Install size", &det.size_install.map(|b| format_bytes(b)).unwrap_or_default()),
         detail_row("Download", &det.size_download.map(|b| format_bytes(b)).unwrap_or_default()),
-        tag_list("Groups", &det.summary.groups),
         tag_list("Dependencies", &det.depends),
         tag_list("Optional deps", &det.opt_depends),
     ))
@@ -452,299 +411,6 @@ fn log_panel(s: &AppState) -> View {
     )
 }
 
-fn pkgbuild_review_dialog(store: &Rc<Store>, s: &AppState) -> View {
-    let Some(ref review) = s.pending_pkgbuild_review else {
-        return Box(Modifier::new());
-    };
-
-    let scroll = remember_scroll_state("pkgbuild_review");
-
-    AlertDialog(
-        true,
-        || {}, // no dismiss
-        Text("Review PKGBUILD").size(20.0),
-        Column(Modifier::new()).child(vec![
-            Text(format!("Package: {}", review.id.name)).size(13.0),
-            Space(Modifier::new().height(12.0)),
-            ScrollArea(
-                Modifier::new()
-                    .fill_max_width()
-                    .max_height(400.0)
-                    .padding(12.0),
-                scroll,
-                Text(review.content.clone()).size(12.0).modifier(Modifier::new().fill_max_width()),
-            ),
-        ]),
-        Row(Modifier::new()).child((
-            danger_button("Reject", {
-                let store = store.clone();
-                move || store.dispatch(Action::RejectPkgbuild)
-            }),
-            Space(Modifier::new().width(8.0)),
-            success_button("Approve", {
-                let store = store.clone();
-                move || store.dispatch(Action::ApprovePkgbuild)
-            }),
-        )),
-        None,
-    )
-}
-
-fn history_panel(s: &AppState) -> View {
-    if s.history.is_empty() {
-        return Box(Modifier::new());
-    }
-
-    let th = theme();
-    let scroll = remember_scroll_state("history_panel");
-
-    Box(Modifier::new()
-        .fill_max_width()
-        .padding(8.0)
-        .background(th.surface)
-        .border(1.0, th.outline_variant, R_MD)
-        .clip_rounded(R_MD))
-    .child(ScrollArea(
-        Modifier::new()
-            .fill_max_width()
-            .max_height(200.0)
-            .padding(4.0),
-        scroll,
-        Column(Modifier::new().fill_max_width()).child(
-            s.history
-                .iter()
-                .map(|entry| {
-                    let status_color = if entry.success { th.primary } else { th.error };
-                    Row(
-                        Modifier::new()
-                            .fill_max_width()
-                            .padding(4.0)
-                            .margin_vertical(2.0),
-                    )
-                    .child(vec![
-                        Text(entry.kind.clone())
-                            .size(11.0)
-                            .color(th.on_surface_variant)
-                            .modifier(Modifier::new().width(70.0)),
-                        Text(entry.pkg.clone().unwrap_or_default())
-                            .size(11.0)
-                            .color(th.on_surface_variant)
-                            .modifier(Modifier::new().width(120.0)),
-                        Text(if entry.success { "OK" } else { "FAIL" })
-                            .size(11.0)
-                            .color(status_color),
-                        Text(entry.message.clone())
-                            .size(11.0)
-                            .color(th.on_surface_variant)
-                            .modifier(Modifier::new().flex_grow(1.0).max_width(200.0))
-                            .overflow_ellipsize(),
-                    ])
-                })
-                .collect::<Vec<_>>(),
-        ),
-    ))
-}
-
-fn orphans_dialog(store: &Rc<Store>, s: &AppState) -> View {
-    let scroll = remember_scroll_state("orphans_dialog");
-
-    AlertDialog(
-        true,
-        {
-            let store = store.clone();
-            move || store.dispatch(Action::HideOrphans)
-        },
-        Text("Orphaned Packages").size(20.0),
-        Column(Modifier::new()).child(vec![
-            Text("Packages installed as dependencies but no longer required.")
-                .size(13.0),
-            Space(Modifier::new().height(12.0)),
-            if s.orphans.is_empty() {
-                Box(Modifier::new())
-            } else {
-                ScrollArea(
-                    Modifier::new()
-                        .fill_max_width()
-                        .max_height(400.0)
-                        .padding(8.0),
-                    scroll,
-                    Column(Modifier::new().fill_max_width()).child(
-                        s.orphans
-                            .iter()
-                            .map(|pkg| {
-                                Row(Modifier::new()
-                                    .fill_max_width()
-                                    .padding(8.0)
-                                    .margin_vertical(2.0))
-                                .child(vec![
-                                    Column(Modifier::new().flex_grow(1.0)).child((
-                                        Text(pkg.id.name.clone()).size(14.0),
-                                        Text(pkg.description.clone())
-                                            .size(11.0)
-                                            .max_lines(1)
-                                            .overflow_ellipsize(),
-                                    )),
-                                    danger_button("Remove", {
-                                        let store = store.clone();
-                                        let id = pkg.id.clone();
-                                        move || store.dispatch(Action::RemoveOrphan(id.clone()))
-                                    }),
-                                ])
-                            })
-                            .collect::<Vec<_>>(),
-                    ),
-                )
-            },
-        ]),
-        text_button("Close", {
-            let store = store.clone();
-            move || store.dispatch(Action::HideOrphans)
-        }),
-        None,
-    )
-}
-
-fn export_panel(store: &Rc<Store>, text: &str) -> View {
-    let th = theme();
-    let scroll = remember_scroll_state("export_panel");
-    let text = text.to_string();
-
-    Column(
-        Modifier::new()
-            .fill_max_width()
-            .padding(8.0)
-            .background(th.surface)
-            .border(1.0, th.outline_variant, R_MD)
-            .clip_rounded(R_MD),
-    )
-    .child(vec![
-        Row(Modifier::new().fill_max_width()).child((
-            Text("Package Export")
-                .size(13.0)
-                .color(th.on_surface),
-            Spacer(),
-            text_button("Dismiss", {
-                let store = store.clone();
-                move || store.dispatch(Action::ShowExport)
-            }),
-        )),
-        Space(Modifier::new().height(4.0)),
-        ScrollArea(
-            Modifier::new()
-                .fill_max_width()
-                .max_height(150.0)
-                .padding(8.0)
-                .background(th.surface_container)
-                .border(1.0, th.outline_variant, R_MD)
-                .clip_rounded(R_MD),
-            scroll,
-            Text(text)
-                .size(11.0)
-                .color(th.on_surface_variant)
-                .modifier(Modifier::new().fill_max_width()),
-        ),
-    ])
-}
-
-fn pacnew_panel(store: &Rc<Store>, s: &AppState) -> View {
-    let th = theme();
-    let scroll = remember_scroll_state("pacnew_panel");
-
-    Column(
-        Modifier::new()
-            .fill_max_width()
-            .padding(8.0)
-            .background(th.surface)
-            .border(1.0, th.outline_variant, R_MD)
-            .clip_rounded(R_MD),
-    )
-    .child(vec![
-        Row(Modifier::new().fill_max_width()).child((
-            Text(format!(".pacnew Files ({})", s.pacnew_files.len()))
-                .size(13.0)
-                .color(th.on_surface),
-            Spacer(),
-            text_button("Dismiss", {
-                let store = store.clone();
-                move || store.dispatch(Action::HidePacnew)
-            }),
-        )),
-        Space(Modifier::new().height(4.0)),
-        ScrollArea(
-            Modifier::new()
-                .fill_max_width()
-                .max_height(150.0)
-                .padding(4.0),
-            scroll,
-            Column(Modifier::new().fill_max_width()).child(
-                s.pacnew_files
-                    .iter()
-                    .map(|f| {
-                        Row(Modifier::new()
-                            .fill_max_width()
-                            .padding(4.0)
-                            .margin_vertical(1.0))
-                        .child((
-                            Text(f.package.clone())
-                                .size(11.0)
-                                .color(th.on_surface_variant)
-                                .modifier(Modifier::new().width(100.0)),
-                            Text(f.path.clone())
-                                .size(11.0)
-                                .color(th.on_surface_variant)
-                                .overflow_ellipsize()
-                                .modifier(Modifier::new().flex_grow(1.0)),
-                        ))
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        ),
-    ])
-}
-
-fn verify_panel(store: &Rc<Store>, text: &str) -> View {
-    let th = theme();
-    let scroll = remember_scroll_state("verify_panel");
-    let text = text.to_string();
-    let is_ok = text == "All packages verified OK.";
-
-    Column(
-        Modifier::new()
-            .fill_max_width()
-            .padding(8.0)
-            .background(th.surface)
-            .border(1.0, th.outline_variant, R_MD)
-            .clip_rounded(R_MD),
-    )
-    .child(vec![
-        Row(Modifier::new().fill_max_width()).child((
-            Text("Verification Results")
-                .size(13.0)
-                .color(th.on_surface),
-            Spacer(),
-            text_button("Dismiss", {
-                let store = store.clone();
-                move || store.dispatch(Action::ShowVerify)
-            }),
-        )),
-        Space(Modifier::new().height(4.0)),
-        ScrollArea(
-            Modifier::new()
-                .fill_max_width()
-                .max_height(150.0)
-                .padding(8.0)
-                .background(th.surface_container)
-                .border(1.0, th.outline_variant, R_MD)
-                .clip_rounded(R_MD),
-            scroll,
-            Text(text.clone())
-                .size(11.0)
-                .color(if is_ok { th.primary } else { th.error })
-                .modifier(Modifier::new().fill_max_width()),
-        ),
-    ])
-}
-
 fn setup_shortcuts(store: &Rc<Store>) {
     let mut map = ShortcutMap::new();
     map.insert(
@@ -784,14 +450,6 @@ fn setup_shortcuts(store: &Rc<Store>) {
 pub fn root_view(store: Rc<Store>) -> View {
     let s = store.state.get();
 
-    // Dialogs take over the full screen
-    if s.pending_pkgbuild_review.is_some() {
-        return pkgbuild_review_dialog(&store, &s);
-    }
-    if s.show_orphans {
-        return orphans_dialog(&store, &s);
-    }
-
     Surface(
         SurfaceConfig {
             modifier: Modifier::new().fill_max_size(),
@@ -804,46 +462,24 @@ pub fn root_view(store: Rc<Store>) -> View {
             move || {
                 setup_shortcuts(&store);
 
-                let content_weight = if s.log_expanded { 7.0 } else { 1.0 };
-
                 let mut children: Vec<View> = vec![
                     top_bar(&store, &s),
                     Divider(DividerConfig::default()),
                     search_section(&store, &s),
                     Space(Modifier::new().height(8.0)),
-                    Column(Modifier::new().fill_max_width().flex_grow(1.0))
+                    Row(Modifier::new()
+                        .fill_max_width()
+                        .flex_grow(1.0)
+                        .flex_basis(0.0))
                     .child((
-                        Row(Modifier::new()
-                            .fill_max_width()
-                            .weight(content_weight)
-                            .flex_basis(0.0))
-                        .child((
-                            Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
-                            Space(Modifier::new().width(8.0)),
-                            Box(Modifier::new().weight(3.0).padding(4.0))
-                                .child(details_pane(store.clone(), &s)),
-                        )),
-                        if s.log_expanded {
-                            Box(Modifier::new().weight(3.0).padding(4.0))
-                                .child(log_panel(&s))
-                        } else {
-                            Box(Modifier::new())
-                        },
+                        Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
+                        Space(Modifier::new().width(8.0)),
+                        Box(Modifier::new().weight(3.0).padding(4.0))
+                            .child(details_pane(store.clone(), &s)),
                     )),
                     status_bar(&store, &s),
+                    log_panel(&s),
                 ];
-                if !s.history.is_empty() {
-                    children.push(history_panel(&s));
-                }
-                if !s.pacnew_files.is_empty() {
-                    children.push(pacnew_panel(&store, &s));
-                }
-                if let Some(ref text) = s.export_text {
-                    children.push(export_panel(&store, text));
-                }
-                if let Some(ref text) = s.verify_text {
-                    children.push(verify_panel(&store, text));
-                }
                 Column(Modifier::new().fill_max_size().padding(16.0)).child(children)
             }
         },

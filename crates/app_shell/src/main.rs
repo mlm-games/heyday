@@ -34,24 +34,23 @@ fn main() -> anyhow::Result<()> {
 
     let repo_backend: Arc<dyn PackageBackend> = Arc::new(PacmanCli::new());
     let aur_backend: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
-    let executor = Executor::new(
-        repo_backend.clone(),
+    Executor::new(
+        repo_backend,
         aur_backend,
         tx_prog.clone(),
         tx_evt.clone(),
         rx_jobs,
-    );
+    )
+    .run();
 
     let overlay = OverlayHandle::new();
     let snackbar = SnackbarController::new(overlay.clone());
 
-    let store = Rc::new(Store::new(tx_jobs.clone(), Some(snackbar.clone())));
+    let store = Rc::new(Store::new(tx_jobs, Some(snackbar.clone())));
 
     {
         spawn(move || {
-            // Callback-style watcher; coalesce by just sending a signal.
             const LOCAL_DB: &str = "/var/lib/pacman/local";
-            // Debounce so we emit at most once per cooldown.
             let cooldown = Duration::from_millis(1200);
             let mut last = Instant::now() - cooldown;
 
@@ -106,7 +105,7 @@ fn main() -> anyhow::Result<()> {
                         let _ = tx_watch.send(());
                     }
                 })
-                .expect("watcher failed — check inotify limits");
+                .expect("watcher failed");
 
             if let Err(e) = watcher.watch(Path::new(LOCAL_DB), RecursiveMode::Recursive) {
                 error!("package DB watcher failed to start: {e}");
@@ -116,46 +115,9 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    executor.run();
-
-    fn pick_file_via_zenity() -> Option<String> {
-        let out = std::process::Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--title",
-                "Select package file",
-                "--file-filter",
-                "Package files (*.pkg.tar.zst *.pkg.tar.gz *.pkg.tar.xz) | *.pkg.tar.zst *.pkg.tar.gz *.pkg.tar.xz",
-            ])
-            .output()
-            .ok()?;
-        if out.status.success() {
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path.is_empty() { Some(path) } else { None }
-        } else {
-            None
-        }
-    }
-
     setup_theme();
 
     run_desktop_app(move |_sched, _ctx| {
-        // Handle file dialog trigger
-        {
-            let mut s = store.state.get();
-            if s.install_local_requested {
-                s.install_local_requested = false;
-                store.state.set(s.clone());
-                if let Some(path) = pick_file_via_zenity() {
-                    store.send_job(
-                        domain::JobKind::InstallLocal,
-                        domain::JobPayload::InstallLocalFile(path),
-                    );
-                }
-                store.state.set(s);
-            }
-        }
-
         while let Ok(p) = rx_prog.try_recv() {
             store.dispatch(Action::Progress(p));
         }
