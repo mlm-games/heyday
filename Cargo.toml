@@ -41,11 +41,11 @@ serde_json = "1"
 strsim = "0.11"
 
 
-# [patch.crates-io]
-# repose-core = { path = "../repose/crates/repose-core" }
-# repose-ui = { path = "../repose/crates/repose-ui" }
-# repose-platform = { path = "../repose/crates/repose-platform" }
-# repose-material = { path = "../repose/crates/repose-material" }
+[patch.crates-io]
+repose-core = { path = "../repose/crates/repose-core" }
+repose-ui = { path = "../repose/crates/repose-ui" }
+repose-platform = { path = "../repose/crates/repose-platform" }
+repose-material = { path = "../repose/crates/repose-material" }
 
 
 [profile.release]

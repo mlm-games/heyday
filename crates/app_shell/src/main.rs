@@ -15,6 +15,7 @@ use std::{
 use app_ui::{
     root_view,
     state::{Action, Store},
+    theme::setup_theme,
 };
 use backend_aur::AurBackend;
 use backend_pacman::PacmanCli;
@@ -135,6 +136,8 @@ fn main() -> anyhow::Result<()> {
             None
         }
     }
+
+    setup_theme();
 
     run_desktop_app(move |_sched, _ctx| {
         // Handle file dialog trigger
