@@ -197,6 +197,7 @@ impl Store {
                                 .absolute()
                                 .offset(Some(16.0), None, Some(16.0), Some(16.0))
                                 .background(snackbar_theme.error_container),
+                            material3::SnackbarConfig::default(),
                         )
                     })
                 }),

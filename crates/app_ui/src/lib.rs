@@ -3,6 +3,7 @@ use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
+use repose_material::material3::{Surface, SurfaceConfig};
 use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
     scroll::{ScrollArea, remember_scroll_state},
@@ -74,6 +75,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
         Row(Modifier::new().fill_max_width()).child((
             TextField(
                 "Search packages…",
+                s.query.clone(),
                 Modifier::new()
                     .flex_grow(1.0)
                     .max_width(500.0)
@@ -257,6 +259,14 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
             .height(PANE_HEIGHT_DP)
             .clip_rounded(R_SM)
             .padding(4.0),
+        |pkg: &PackageSummary| {
+            let mut h: u64 = 0;
+            for b in pkg.id.name.bytes() {
+                h = h.wrapping_mul(31).wrapping_add(b as u64);
+            }
+            h
+        },
+        None::<repose_core::animation::AnimationSpec>,
         move |pkg: PackageSummary, _| {
             let is_sel = selected.as_ref().is_some_and(|id| *id == pkg.id);
             pkg_row(store.clone(), pkg, is_sel, upgrades_mode)
@@ -431,22 +441,31 @@ pub fn root_view(store: Rc<Store>) -> View {
     let s = store.state.get();
 
     Surface(
-        Modifier::new()
-            .fill_max_size()
-            .background_brush(v_gradient(BG_START, BG_END)),
-        Column(Modifier::new().fill_max_size().padding(16.0)).child((
-            top_bar(&store, &s),
-            divider(),
-            search_section(&store, &s),
-            Space(Modifier::new().height(8.0)),
-            Row(Modifier::new().fill_max_width().flex_grow(1.0).flex_basis(0.0)).child((
-                Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
-                Space(Modifier::new().width(8.0)),
-                Box(Modifier::new().weight(3.0).padding(4.0))
-                    .child(details_pane(store.clone(), &s)),
-            )),
-            status_bar(&store, &s),
-            log_panel(&s),
-        )),
+        SurfaceConfig {
+            modifier: Modifier::new()
+                .fill_max_size()
+                .background_brush(v_gradient(BG_START, BG_END)),
+            ..Default::default()
+        },
+        || {
+            Column(Modifier::new().fill_max_size().padding(16.0)).child((
+                top_bar(&store, &s),
+                divider(),
+                search_section(&store, &s),
+                Space(Modifier::new().height(8.0)),
+                Row(Modifier::new()
+                    .fill_max_width()
+                    .flex_grow(1.0)
+                    .flex_basis(0.0))
+                .child((
+                    Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
+                    Space(Modifier::new().width(8.0)),
+                    Box(Modifier::new().weight(3.0).padding(4.0))
+                        .child(details_pane(store.clone(), &s)),
+                )),
+                status_bar(&store, &s),
+                log_panel(&s),
+            ))
+        },
     )
 }

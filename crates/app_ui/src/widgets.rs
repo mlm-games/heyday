@@ -3,6 +3,7 @@
 
 use crate::theme::*;
 use repose_core::*;
+use repose_material::material3::Button;
 use repose_ui::*;
 
 fn badge(label: &str, fg: &str, bg: &str) -> View {
@@ -42,10 +43,6 @@ pub fn chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {
         (CHIP_OFF_BG, CHIP_OFF_BORDER, CHIP_OFF_TEXT)
     };
     Button(
-        Text(label).size(FONT_SM).color(Color::from_hex(fg)),
-        on_click,
-    )
-    .modifier(
         Modifier::new()
             .padding_values(PaddingValues {
                 left: 14.0,
@@ -56,45 +53,41 @@ pub fn chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {
             .background(Color::from_hex(bg))
             .border(1.0, Color::from_hex(border), 999.0)
             .clip_rounded(999.0),
+        on_click,
+        || Text(label).size(FONT_SM).color(Color::from_hex(fg)),
     )
 }
 
 pub fn primary_button(label: &str, on_click: impl Fn() + 'static) -> View {
     Button(
-        Text(label)
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_PRIMARY)),
+        pill(BLUE_BG, BLUE_BORDER),
         on_click,
+        || Text(label).size(FONT_BASE).color(Color::from_hex(TEXT_PRIMARY)),
     )
-    .modifier(pill(BLUE_BG, BLUE_BORDER))
 }
 
 pub fn secondary_button(label: &str, on_click: impl Fn() + 'static) -> View {
     Button(
-        Text(label)
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_MUTED)),
+        pill(CHIP_OFF_BG, CHIP_OFF_BORDER),
         on_click,
+        || Text(label).size(FONT_BASE).color(Color::from_hex(TEXT_MUTED)),
     )
-    .modifier(pill(CHIP_OFF_BG, CHIP_OFF_BORDER))
 }
 
 pub fn success_button(label: &str, on_click: impl Fn() + 'static) -> View {
     Button(
-        Text(label)
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_PRIMARY)),
+        pill(GREEN_BG, GREEN_BORDER),
         on_click,
+        || Text(label).size(FONT_BASE).color(Color::from_hex(TEXT_PRIMARY)),
     )
-    .modifier(pill(GREEN_BG, GREEN_BORDER))
 }
 
 pub fn danger_button(label: &str, on_click: impl Fn() + 'static) -> View {
     Button(
-        Text(label).size(FONT_BASE).color(Color::from_hex(RED)),
+        pill(RED_BG, RED_BORDER),
         on_click,
+        || Text(label).size(FONT_BASE).color(Color::from_hex(RED)),
     )
-    .modifier(pill(RED_BG, RED_BORDER))
 }
 
 pub fn divider() -> View {
