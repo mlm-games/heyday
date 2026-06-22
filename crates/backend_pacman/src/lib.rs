@@ -466,6 +466,146 @@ impl PacmanCli {
     }
 }
 
+impl PacmanCli {
+    pub fn available_groups() -> Vec<String> {
+        let sync_dbs = Self::read_all_sync_dbs();
+        let mut groups: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for packages in sync_dbs.values() {
+            for pkg in packages.values() {
+                for g in &pkg.groups {
+                    groups.insert(g.to_string());
+                }
+            }
+        }
+        groups.into_iter().collect()
+    }
+
+    pub fn orphans_list() -> Result<Vec<PackageSummary>> {
+        let out = Command::new("pacman")
+            .args(["-Qdtq"])
+            .output()
+            .map_err(|e| Error::Internal(format!("pacman -Qdtq: {e}")))?;
+        if !out.status.success() {
+            return Ok(vec![]);
+        }
+        let local = Self::read_local_db();
+        let sync_dbs = Self::read_all_sync_dbs();
+        let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let mut results = Vec::new();
+        for name in names {
+            let installed = local.contains_key(&name);
+            let mut summary = PackageSummary {
+                id: PackageId { name: name.clone(), source: Source::Repo },
+                version: String::new(),
+                description: String::new(),
+                groups: vec![],
+                installed,
+                popular: None,
+                last_updated: None,
+            };
+            // Try to get details from local DB
+            if let Some(lpkg) = local.get(&name) {
+                summary.version = lpkg.version.to_string();
+                summary.description = lpkg.description.to_string();
+            }
+            // Try sync DB for version/description
+            for packages in sync_dbs.values() {
+                if let Some(spkg) = packages.get(&name) {
+                    summary.version = spkg.version.to_string();
+                    summary.description = spkg.description.to_string();
+                    summary.groups = spkg.groups.iter().map(|g| g.to_string()).collect();
+                    break;
+                }
+            }
+            results.push(summary);
+        }
+        results.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+        Ok(results)
+    }
+
+    pub fn export_list() -> Result<String> {
+        let out = Command::new("pacman")
+            .args(["-Qqe"])
+            .output()
+            .map_err(|e| Error::Internal(format!("pacman -Qqe: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::Alpm("pacman -Qqe failed".into()));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    }
+
+    pub fn pacnew_list() -> Result<Vec<PacnewFile>> {
+        let mut files = Vec::new();
+        let find = Command::new("find")
+            .args(["/etc", "-name", "*.pacnew", "-maxdepth", "2"])
+            .output()
+            .map_err(|e| Error::Internal(format!("find pacnew: {e}")))?;
+        for line in String::from_utf8_lossy(&find.stdout).lines() {
+            let path = line.trim().to_string();
+            if path.is_empty() { continue; }
+            let pkg = Self::pkg_for_path(&path);
+            files.push(PacnewFile { path, package: pkg });
+        }
+        // Also check /var and /usr
+        for base in &["/var", "/usr"] {
+            let find = Command::new("find")
+                .args([base, "-name", "*.pacnew", "-maxdepth", "3"])
+                .output()
+                .map_err(|e| Error::Internal(format!("find pacnew in {base}: {e}")))?;
+            for line in String::from_utf8_lossy(&find.stdout).lines() {
+                let path = line.trim().to_string();
+                if path.is_empty() { continue; }
+                let pkg = Self::pkg_for_path(&path);
+                files.push(PacnewFile { path, package: pkg });
+            }
+        }
+        Ok(files)
+    }
+
+    fn pkg_for_path(path: &str) -> String {
+        // Use pacman -Qo to find owner
+        let out = Command::new("pacman")
+            .args(["-Qo", path])
+            .output()
+            .ok();
+        if let Some(out) = out {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = s.lines().next() {
+                    if let Some(name) = line.split_whitespace().next() {
+                        return name.to_string();
+                    }
+                }
+            }
+        }
+        "unknown".into()
+    }
+
+    pub fn verify_packages() -> Result<String> {
+        let out = Command::new("pacman")
+            .args(["-Qkk", "--quiet"])
+            .output()
+            .map_err(|e| Error::Internal(format!("pacman -Qkk: {e}")))?;
+        if out.status.success() {
+            Ok("All packages verified OK.".into())
+        } else {
+            let output = String::from_utf8_lossy(&out.stdout).to_string();
+            let lines: Vec<&str> = output.lines()
+                .filter(|l| !l.is_empty())
+                .collect();
+            if lines.is_empty() {
+                Ok("All packages verified OK.".into())
+            } else {
+                Ok(lines.join("\n"))
+            }
+        }
+    }
+}
+
 impl PackageBackend for PacmanCli {
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let r = self.try_run_helper(
@@ -594,6 +734,7 @@ impl PackageBackend for PacmanCli {
                         },
                         version: pkg.version.to_string(),
                         description: pkg.description.to_string(),
+                        groups: pkg.groups.iter().map(|g| g.to_string()).collect(),
                         installed: installed.contains(pkg.name.to_string().as_str()),
                         popular: None,
                         last_updated: None,
@@ -645,6 +786,7 @@ impl PackageBackend for PacmanCli {
                         id: id.clone(),
                         version: pkg.version.to_string(),
                         description: pkg.description.to_string(),
+                        groups: pkg.groups.iter().map(|g| g.to_string()).collect(),
                         installed: false,
                         popular: None,
                         last_updated: None,
@@ -714,6 +856,7 @@ impl PackageBackend for PacmanCli {
                             },
                             version: sync_pkg.version.to_string(),
                             description: sync_pkg.description.to_string(),
+                            groups: sync_pkg.groups.iter().map(|g| g.to_string()).collect(),
                             installed: true,
                             popular: None,
                             last_updated: None,
@@ -783,5 +926,33 @@ impl PackageBackend for PacmanCli {
 
     fn cache_clean(&self, keep: u32, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         self.cache_clean(keep, sink, cancel)
+    }
+
+    fn available_groups(&self) -> Vec<String> {
+        Self::available_groups()
+    }
+
+    fn orphans(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        let _ = sink;
+        let _ = cancel;
+        Self::orphans_list()
+    }
+
+    fn export(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<String> {
+        let _ = sink;
+        let _ = cancel;
+        Self::export_list()
+    }
+
+    fn pacnew(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<Vec<PacnewFile>> {
+        let _ = sink;
+        let _ = cancel;
+        Self::pacnew_list()
+    }
+
+    fn verify(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<String> {
+        let _ = sink;
+        let _ = cancel;
+        Self::verify_packages()
     }
 }

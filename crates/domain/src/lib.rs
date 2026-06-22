@@ -26,6 +26,7 @@ pub struct PackageSummary {
     pub id: PackageId,
     pub version: String,
     pub description: String,
+    pub groups: Vec<String>,
     pub installed: bool,
     pub popular: Option<u32>,
     pub last_updated: Option<SystemTime>,
@@ -92,6 +93,13 @@ pub enum Event {
         versions: Vec<String>,
     },
     HistoryEntries(Vec<HistoryEntry>),
+    Orphans(Vec<PackageSummary>),
+    /// Exported package list as text.
+    ExportResult(String),
+    /// Detected .pacnew files.
+    PacnewFiles(Vec<PacnewFile>),
+    /// All available package groups across all repos.
+    AvailableGroups(Vec<String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -127,6 +135,29 @@ impl Default for CancelToken {
         Self::new()
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct PacnewFile {
+    pub path: String,
+    pub package: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoveOptions {
+    pub cascade: bool,
+    pub keep_config: bool,
+    pub remove_optdeps: bool,
+}
+
+impl Default for RemoveOptions {
+    fn default() -> Self {
+        Self {
+            cascade: true,
+            keep_config: false,
+            remove_optdeps: true,
+        }
+    }
+}
+
 impl CancelToken {
     pub fn new() -> Self {
         Self(Arc::new(AtomicBool::new(false)))
@@ -228,6 +259,26 @@ pub trait PackageBackend: Send + Sync {
     fn cache_clean(&self, _keep: u32, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         Err(Error::Internal("cache_clean not implemented".into()))
     }
+    /// List all available package groups across repos.
+    fn available_groups(&self) -> Vec<String> {
+        vec![]
+    }
+    /// List orphaned packages (unused deps).
+    fn orphans(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        Err(Error::Internal("orphans not implemented".into()))
+    }
+    /// Export installed packages as text.
+    fn export(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<String> {
+        Err(Error::Internal("export not implemented".into()))
+    }
+    /// List .pacnew files.
+    fn pacnew(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<Vec<PacnewFile>> {
+        Err(Error::Internal("pacnew not implemented".into()))
+    }
+    /// Verify installed packages, returning output text.
+    fn verify(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<String> {
+        Err(Error::Internal("verify not implemented".into()))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -244,6 +295,10 @@ pub enum JobKind {
     CacheClean,
     Downgrade,
     History,
+    Orphans,
+    Export,
+    Pacnew,
+    Verify,
 }
 
 #[derive(Clone, Debug)]
@@ -255,6 +310,9 @@ pub enum JobPayload {
     InstallLocalFile(String),
     CacheCleanCount(u32),
     DowngradeVersion { id: PackageId, version: String },
+    RemoveWithOptions { id: PackageId, options: RemoveOptions },
+    Export,
+    ExportFormat(String),
 }
 
 #[derive(Clone, Debug)]
@@ -524,6 +582,10 @@ impl Executor {
                                 let sb = score_search(b, &q_lower);
                                 sb.cmp(&sa).then_with(|| a.id.name.cmp(&b.id.name))
                             });
+                            // Also send available groups
+                            let groups = repo.available_groups();
+                            let _ = tx_evt.send(Event::AvailableGroups(groups));
+
                             if *active_id == Some(job.id) {
                                 tx_evt
                                     .send(Event::SearchResults { query: q, items })
@@ -603,11 +665,39 @@ impl Executor {
                         }
                         JobKind::Remove => {
                             let _g = TXN_MUTEX.lock();
-                            if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).remove(id, &tx_local, &cancel)
-                            } else {
-                                Ok(())
+                            match &job.payload {
+                                JobPayload::Package(id) => {
+                                    pick(&job.payload).remove(id, &tx_local, &cancel)
+                                }
+                                JobPayload::RemoveWithOptions { id, options } => {
+                                    let _ = options;
+                                    // TODO: pass remove options to backend
+                                    repo.remove(id, &tx_local, &cancel)
+                                }
+                                _ => Ok(()),
                             }
+                        }
+                        JobKind::Orphans => {
+                            // Collect orphans from repo backend
+                            let orphans = repo.orphans(&tx_local, &cancel)?;
+                            let _ = tx_evt.send(Event::Orphans(orphans));
+                            Ok(())
+                        }
+                        JobKind::Export => {
+                            let text = repo.export(&tx_local, &cancel)?;
+                            let _ = tx_evt.send(Event::ExportResult(text));
+                            Ok(())
+                        }
+                        JobKind::Pacnew => {
+                            let files = repo.pacnew(&tx_local, &cancel)?;
+                            let _ = tx_evt.send(Event::PacnewFiles(files));
+                            Ok(())
+                        }
+                        JobKind::Verify => {
+                            let results = repo.verify(&tx_local, &cancel)?;
+                            // Reuse ExportResult for now — shows verification output
+                            let _ = tx_evt.send(Event::ExportResult(results));
+                            Ok(())
                         }
                         JobKind::Upgrades => {
                             // Collect from both repo and AUR, but don’t fail the whole job

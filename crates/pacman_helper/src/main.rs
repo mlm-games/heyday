@@ -87,6 +87,7 @@ fn main() {
                     .unwrap_or(3);
                 cmd_cache_clean(keep)
             }
+            "keyring" => cmd_keyring(),
             other => Err(format!("unknown command: {other}")),
         }
     })();
@@ -338,4 +339,28 @@ fn emit_progress_stage(
     }
     parts.push(format!(r#""warning":{warning}"#));
     emit_json(&format!("{{{}}}", parts.join(",")));
+}
+
+fn cmd_keyring() -> Result<(), String> {
+    emit_progress_stage("keyring", None, None, Some("initializing pacman keyring"), false);
+
+    let status = process::Command::new("pacman-key")
+        .args(["--init"])
+        .status()
+        .map_err(|e| format!("pacman-key --init: {e}"))?;
+    if !status.success() {
+        return Err("pacman-key --init failed".into());
+    }
+
+    emit_progress_stage("keyring", None, None, Some("populating archlinux keyring"), false);
+
+    let status = process::Command::new("pacman-key")
+        .args(["--populate", "archlinux"])
+        .status()
+        .map_err(|e| format!("pacman-key --populate archlinux: {e}"))?;
+    if !status.success() {
+        return Err("pacman-key --populate archlinux failed".into());
+    }
+
+    Ok(())
 }

@@ -192,6 +192,29 @@ pub fn tag_list(label: &str, items: &[String]) -> View {
     ))
 }
 
+pub fn group_chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {
+    let (bg, border, fg) = if on {
+        (INDIGO_BG, INDIGO, INDIGO)
+    } else {
+        (CHIP_OFF_BG, CHIP_OFF_BORDER, CHIP_OFF_TEXT)
+    };
+    Button(
+        Modifier::new()
+            .padding_values(PaddingValues {
+                left: 10.0,
+                right: 10.0,
+                top: 4.0,
+                bottom: 4.0,
+            })
+            .margin(2.0)
+            .background(Color::from_hex(bg))
+            .border(1.0, Color::from_hex(border), 999.0)
+            .clip_rounded(999.0),
+        on_click,
+        || Text(label).size(FONT_XS).color(Color::from_hex(fg)),
+    )
+}
+
 pub fn format_bytes(b: u64) -> String {
     if b >= 1024 * 1024 {
         format!("{:.1} MiB", b as f64 / (1024.0 * 1024.0))

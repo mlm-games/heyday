@@ -3,6 +3,10 @@ use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
+use repose_core::{
+    input::{Key, Modifiers},
+    shortcuts::{self, ShortcutMap},
+};
 use repose_material::material3::{
     LinearProgressIndicator, LinearProgressIndicatorConfig, Surface, SurfaceConfig,
 };
@@ -75,6 +79,30 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             let store = store.clone();
             move || store.dispatch(Action::CleanCache(3))
         }),
+        Space(Modifier::new().width(6.0)),
+        // Orphans
+        secondary_button("Orphans", {
+            let store = store.clone();
+            move || store.dispatch(Action::ShowOrphans)
+        }),
+        Space(Modifier::new().width(6.0)),
+        // Export
+        secondary_button("Export", {
+            let store = store.clone();
+            move || store.dispatch(Action::ShowExport)
+        }),
+        Space(Modifier::new().width(6.0)),
+        // Verify
+        secondary_button("Verify", {
+            let store = store.clone();
+            move || store.dispatch(Action::ShowVerify)
+        }),
+        Space(Modifier::new().width(6.0)),
+        // Pacnew
+        secondary_button(".pacnew", {
+            let store = store.clone();
+            move || store.dispatch(Action::ShowPacnew)
+        }),
     ])
 }
 
@@ -89,7 +117,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                 bottom: 8.0,
             }),
     )
-    .child((
+    .child(vec![
         Row(Modifier::new().fill_max_width()).child((
             TextField(
                 "Search packages…",
@@ -168,7 +196,24 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                 move || store.dispatch(Action::SetSort(SortMode::NameDesc))
             }),
         ]),
-    ))
+        Space(Modifier::new().height(6.0)),
+        Row(Modifier::new().fill_max_width().flex_wrap(FlexWrap::Wrap)).child(
+            std::iter::once({
+                let store = store.clone();
+                group_chip("All", s.active_group.is_none(), move || store.dispatch(Action::SetGroupFilter(None)))
+            })
+            .chain(s.available_groups.iter().take(20).map(|g| {
+                let g = g.clone();
+                let selected = s.active_group.as_deref() == Some(&g);
+                let store = store.clone();
+                let g_rc = std::rc::Rc::new(g.clone());
+                group_chip(&g, selected, move || {
+                    store.dispatch(Action::SetGroupFilter(Some((*g_rc).clone())))
+                })
+            }))
+            .collect::<Vec<_>>(),
+        ),
+    ])
 }
 
 fn pkg_action(store: &Rc<Store>, pkg: &PackageSummary, upgrades_mode: bool) -> View {
@@ -401,6 +446,7 @@ fn details_body(det: &PackageDetails) -> View {
                 .map(|b| format_bytes(b))
                 .unwrap_or_default(),
         ),
+        tag_list("Groups", &det.summary.groups),
         tag_list("Dependencies", &det.depends),
         tag_list("Optional deps", &det.opt_depends),
     ))
@@ -621,12 +667,272 @@ fn history_panel(s: &AppState) -> View {
     ))
 }
 
+fn orphans_dialog(store: &Rc<Store>, s: &AppState) -> View {
+    let scroll = remember_scroll_state("orphans_dialog");
+
+    Surface(
+        SurfaceConfig {
+            modifier: Modifier::new()
+                .fill_max_size()
+                .background_brush(v_gradient(BG_START, BG_END)),
+            ..Default::default()
+        },
+        || {
+            Column(Modifier::new().fill_max_size().padding(24.0)).child(vec![
+                Row(Modifier::new().fill_max_width()).child((
+                    Text("Orphaned Packages")
+                        .size(FONT_XL)
+                        .color(Color::from_hex(TEXT_PRIMARY)),
+                    Spacer(),
+                    secondary_button("Close", {
+                        let store = store.clone();
+                        move || store.dispatch(Action::HideOrphans)
+                    }),
+                )),
+                Space(Modifier::new().height(12.0)),
+                Text("Packages installed as dependencies but no longer required.")
+                    .size(FONT_SM)
+                    .color(Color::from_hex(TEXT_DIMMED)),
+                Space(Modifier::new().height(12.0)),
+                if s.orphans.is_empty() {
+                    empty_state("No orphans", "All dependencies are still needed.")
+                } else {
+                    ScrollArea(
+                        Modifier::new()
+                            .fill_max_width()
+                            .flex_grow(1.0)
+                            .background(Color::from_hex(CARD_BG))
+                            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                            .clip_rounded(R_MD)
+                            .padding(8.0),
+                        scroll,
+                        Column(Modifier::new().fill_max_width()).child(
+                            s.orphans
+                                .iter()
+                                .map(|pkg| {
+                                    Row(Modifier::new()
+                                        .fill_max_width()
+                                        .padding(8.0)
+                                        .margin_vertical(2.0)
+                                        .background(Color::from_hex(CARD_SURFACE))
+                                        .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                                        .clip_rounded(R_MD))
+                                    .child(vec![
+                                        Column(Modifier::new().flex_grow(1.0)).child((
+                                            Text(pkg.id.name.clone())
+                                                .size(FONT_BASE)
+                                                .color(Color::from_hex(TEXT_PRIMARY)),
+                                            Text(pkg.description.clone())
+                                                .size(FONT_XS)
+                                                .color(Color::from_hex(TEXT_MUTED))
+                                                .max_lines(1)
+                                                .overflow_ellipsize(),
+                                        )),
+                                        danger_button("Remove", {
+                                            let store = store.clone();
+                                            let id = pkg.id.clone();
+                                            move || store.dispatch(Action::RemoveOrphan(id.clone()))
+                                        }),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
+                    )
+                },
+            ])
+        },
+    )
+}
+
+fn export_panel(store: &Rc<Store>, text: &str) -> View {
+    let scroll = remember_scroll_state("export_panel");
+    let text = text.to_string();
+
+    Column(
+        Modifier::new()
+            .fill_max_width()
+            .padding(8.0)
+            .background(Color::from_hex(CARD_BG))
+            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+            .clip_rounded(R_MD),
+    )
+    .child(vec![
+        Row(Modifier::new().fill_max_width()).child((
+            Text("Package Export")
+                .size(FONT_SM)
+                .color(Color::from_hex(TEXT_PRIMARY)),
+            Spacer(),
+            secondary_button("Dismiss", {
+                let store = store.clone();
+                move || store.dispatch(Action::ShowExport) // re-fetch to clear
+            }),
+        )),
+        Space(Modifier::new().height(4.0)),
+        ScrollArea(
+            Modifier::new()
+                .fill_max_width()
+                .max_height(150.0)
+                .padding(8.0)
+                .background(Color::from_hex(CARD_SURFACE))
+                .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                .clip_rounded(R_MD),
+            scroll,
+            Text(text)
+                .size(FONT_XS)
+                .color(Color::from_hex(LOG_TEXT))
+                .modifier(Modifier::new().fill_max_width()),
+        ),
+    ])
+}
+
+fn pacnew_panel(store: &Rc<Store>, s: &AppState) -> View {
+    let scroll = remember_scroll_state("pacnew_panel");
+
+    Column(
+        Modifier::new()
+            .fill_max_width()
+            .padding(8.0)
+            .background(Color::from_hex(CARD_BG))
+            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+            .clip_rounded(R_MD),
+    )
+    .child(vec![
+        Row(Modifier::new().fill_max_width()).child((
+            Text(format!(".pacnew Files ({})", s.pacnew_files.len()))
+                .size(FONT_SM)
+                .color(Color::from_hex(TEXT_PRIMARY)),
+            Spacer(),
+            secondary_button("Dismiss", {
+                let store = store.clone();
+                move || store.dispatch(Action::HidePacnew)
+            }),
+        )),
+        Space(Modifier::new().height(4.0)),
+        ScrollArea(
+            Modifier::new()
+                .fill_max_width()
+                .max_height(150.0)
+                .padding(4.0),
+            scroll,
+            Column(Modifier::new().fill_max_width()).child(
+                s.pacnew_files
+                    .iter()
+                    .map(|f| {
+                        Row(Modifier::new()
+                            .fill_max_width()
+                            .padding(4.0)
+                            .margin_vertical(1.0))
+                        .child((
+                            Text(f.package.clone())
+                                .size(FONT_XS)
+                                .color(Color::from_hex(TEXT_DIMMED))
+                                .modifier(Modifier::new().width(100.0)),
+                            Text(f.path.clone())
+                                .size(FONT_XS)
+                                .color(Color::from_hex(TEXT_MUTED))
+                                .overflow_ellipsize()
+                                .modifier(Modifier::new().flex_grow(1.0)),
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        ),
+    ])
+}
+
+fn verify_panel(store: &Rc<Store>, text: &str) -> View {
+    let scroll = remember_scroll_state("verify_panel");
+    let text = text.to_string();
+    let is_ok = text == "All packages verified OK.";
+
+    Column(
+        Modifier::new()
+            .fill_max_width()
+            .padding(8.0)
+            .background(Color::from_hex(CARD_BG))
+            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+            .clip_rounded(R_MD),
+    )
+    .child(vec![
+        Row(Modifier::new().fill_max_width()).child((
+            Text("Verification Results")
+                .size(FONT_SM)
+                .color(Color::from_hex(TEXT_PRIMARY)),
+            Spacer(),
+            secondary_button("Dismiss", {
+                let store = store.clone();
+                move || store.dispatch(Action::ShowVerify)
+            }),
+        )),
+        Space(Modifier::new().height(4.0)),
+        ScrollArea(
+            Modifier::new()
+                .fill_max_width()
+                .max_height(150.0)
+                .padding(8.0)
+                .background(Color::from_hex(CARD_SURFACE))
+                .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                .clip_rounded(R_MD),
+            scroll,
+            Text(text.clone())
+                .size(FONT_XS)
+                .color(if is_ok {
+                    Color::from_hex(GREEN)
+                } else {
+                    Color::from_hex(RED)
+                })
+                .modifier(Modifier::new().fill_max_width()),
+        ),
+    ])
+}
+
+fn setup_shortcuts(store: &Rc<Store>) {
+    let mut map = ShortcutMap::new();
+    map.insert(
+        Key::Character('f'),
+        Modifiers { ctrl: true, ..Modifiers::default() },
+        shortcuts::Action::Custom("search".into()),
+    );
+    map.insert(
+        Key::Character('q'),
+        Modifiers { ctrl: true, ..Modifiers::default() },
+        shortcuts::Action::Custom("quit".into()),
+    );
+    scoped_effect({
+        let store = store.clone();
+        move || {
+            let map_scope = shortcuts::InstallShortcutMap(map);
+            let handler_scope = shortcuts::InstallShortcutHandler(Rc::new(move |action| {
+                match &action {
+                    shortcuts::Action::Custom(key) if key.as_ref() == "search" => {
+                        store.dispatch(Action::SetQuery(String::new()));
+                        true
+                    }
+                    shortcuts::Action::Custom(key) if key.as_ref() == "quit" => {
+                        std::process::exit(0);
+                    }
+                    _ => false,
+                }
+            }));
+            Dispose::new(move || {
+                map_scope.run();
+                handler_scope.run();
+            })
+        }
+    });
+}
+
 pub fn root_view(store: Rc<Store>) -> View {
     let s = store.state.get();
 
     // If PKGBUILD review is pending, show only the dialog
     if s.pending_pkgbuild_review.is_some() {
         return pkgbuild_review_dialog(&store, &s);
+    }
+
+    // Orphans dialog
+    if s.show_orphans {
+        return orphans_dialog(&store, &s);
     }
 
     Surface(
@@ -637,7 +943,9 @@ pub fn root_view(store: Rc<Store>) -> View {
             ..Default::default()
         },
         || {
-            Column(Modifier::new().fill_max_size().padding(16.0)).child((
+            setup_shortcuts(&store);
+
+            let mut children: Vec<View> = vec![
                 top_bar(&store, &s),
                 divider(),
                 search_section(&store, &s),
@@ -654,12 +962,20 @@ pub fn root_view(store: Rc<Store>) -> View {
                 )),
                 status_bar(&store, &s),
                 log_panel(&s),
-                if !s.history.is_empty() {
-                    history_panel(&s)
-                } else {
-                    Box(Modifier::new())
-                },
-            ))
+            ];
+            if !s.history.is_empty() {
+                children.push(history_panel(&s));
+            }
+            if !s.pacnew_files.is_empty() {
+                children.push(pacnew_panel(&store, &s));
+            }
+            if let Some(ref text) = s.export_text {
+                children.push(export_panel(&store, text));
+            }
+            if let Some(ref text) = s.verify_text {
+                children.push(verify_panel(&store, text));
+            }
+            Column(Modifier::new().fill_max_size().padding(16.0)).child(children)
         },
     )
 }

@@ -61,6 +61,24 @@ pub struct AppState {
 
     /// Cache clean dialog: number of versions to keep (None = dialog closed).
     pub cache_keep_requested: bool,
+
+    /// Orphaned packages list.
+    pub orphans: Vec<PackageSummary>,
+    pub show_orphans: bool,
+
+    /// Package export text.
+    pub export_text: Option<String>,
+
+    /// .pacnew files detected.
+    pub pacnew_files: Vec<PacnewFile>,
+    pub show_pacnew: bool,
+
+    /// Available package groups for filtering.
+    pub available_groups: Vec<String>,
+    pub active_group: Option<String>,
+
+    /// Verification results text.
+    pub verify_text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +100,9 @@ impl AppState {
                     || (self.filter_aur && x.id.source == Source::Aur)
             })
             .filter(|x| !self.filter_installed || x.installed)
+            .filter(|x| {
+                self.active_group.as_ref().map_or(true, |g| x.groups.contains(g))
+            })
             .collect();
 
         match self.sort {
@@ -148,6 +169,16 @@ pub enum Action {
     CleanCache(u32),
     ShowHistory,
     HideHistory,
+    ShowOrphans,
+    HideOrphans,
+    RemoveOrphan(PackageId),
+    ShowExport,
+    ShowPacnew,
+    HidePacnew,
+    ShowVerify,
+    /// Guard: remove options confirmation before proceeding.
+    RequestRemove { id: PackageId, cascade: bool, keep_config: bool, remove_optdeps: bool },
+    SetGroupFilter(Option<String>),
 }
 
 pub struct Store {
@@ -366,6 +397,18 @@ impl Store {
                 Event::CachedVersions { .. } | Event::HistoryEntries(_) => {
                     // Handled by dedicated action dispatch
                 }
+                Event::Orphans(items) => {
+                    s.orphans = items;
+                }
+                Event::ExportResult(text) => {
+                    s.export_text = Some(text);
+                }
+                Event::PacnewFiles(files) => {
+                    s.pacnew_files = files;
+                }
+                Event::AvailableGroups(groups) => {
+                    s.available_groups = groups;
+                }
             },
 
             Action::Select(id) => {
@@ -431,6 +474,50 @@ impl Store {
             }
             Action::HideHistory => {
                 s.history.clear();
+            }
+            Action::ShowOrphans => {
+                s.show_orphans = true;
+                self.send_job(JobKind::Orphans, JobPayload::None);
+            }
+            Action::HideOrphans => {
+                s.show_orphans = false;
+                s.orphans.clear();
+            }
+            Action::RemoveOrphan(id) => {
+                s.show_orphans = false;
+                self.send_job(JobKind::Remove, JobPayload::Package(id));
+            }
+            Action::ShowExport => {
+                if s.export_text.is_some() {
+                    s.export_text = None;
+                } else {
+                    self.send_job(JobKind::Export, JobPayload::Export);
+                }
+            }
+            Action::ShowPacnew => {
+                s.show_pacnew = true;
+                self.send_job(JobKind::Pacnew, JobPayload::None);
+            }
+            Action::HidePacnew => {
+                s.show_pacnew = false;
+                s.pacnew_files.clear();
+            }
+            Action::ShowVerify => {
+                if s.verify_text.is_some() {
+                    s.verify_text = None;
+                } else {
+                    self.send_job(JobKind::Verify, JobPayload::None);
+                }
+            }
+            Action::RequestRemove { id, cascade, keep_config, remove_optdeps } => {
+                s.show_orphans = false;
+                self.send_job(JobKind::Remove, JobPayload::RemoveWithOptions {
+                    id, options: RemoveOptions { cascade, keep_config, remove_optdeps },
+                });
+            }
+            Action::SetGroupFilter(group) => {
+                s.active_group = group;
+                s.refilter();
             }
         }
         self.state.set(s);
