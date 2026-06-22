@@ -12,3 +12,4 @@ alpm-repo-db.workspace = true
 alpm-types.workspace = true
 flate2.workspace = true
 tar.workspace = true
+serde_json.workspace = true

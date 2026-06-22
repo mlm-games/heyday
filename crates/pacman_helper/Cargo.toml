@@ -1,0 +1,8 @@
+[package]
+name = "pacman_helper"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+alpm.workspace = true
+serde_json.workspace = true

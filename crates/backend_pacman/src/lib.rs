@@ -17,6 +17,21 @@ use tar::Archive;
 use domain::*;
 
 const PACMAN_DB: &str = "/var/lib/pacman";
+const HELPER_BIN: &str = "pacman-helper";
+
+fn parse_json_stage(s: Option<&str>) -> Stage {
+    match s {
+        Some("refreshing") => Stage::Refreshing,
+        Some("downloading") => Stage::Downloading,
+        Some("installing") => Stage::Installing,
+        Some("removing") => Stage::Removing,
+        Some("resolving") => Stage::Resolving,
+        Some("verifying") => Stage::Verifying,
+        Some("cleaning") => Stage::Cleaning,
+        Some("keyring") => Stage::Verifying,
+        _ => Stage::Installing,
+    }
+}
 
 pub struct PacmanCli;
 
@@ -201,22 +216,202 @@ impl PacmanCli {
             }
         }
     }
-}
 
-impl PackageBackend for PacmanCli {
-    fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+    fn try_run_helper(
+        &self,
+        helper_args: &[&str],
+        stage: Stage,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> std::result::Result<(), Option<Error>> {
         let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
-        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
+        cmd.arg(HELPER_BIN);
+        cmd.args(helper_args);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return Err(Some(Error::Internal(format!("spawn helper: {e}")))),
+        };
+        let out = child.stdout.take().expect("stdout piped");
+        let err = child.stderr.take().expect("stderr piped");
+
+        let jid = 0u64;
+
+        // Stderr → warning log lines
+        let tx_err = sink.clone();
+        let cancel_err = cancel.clone();
+        let err_thread = std::thread::spawn(move || {
+            for l in BufReader::new(err).lines().filter_map(|r| r.ok()) {
+                if cancel_err.is_cancelled() {
+                    break;
+                }
+                let _ = tx_err.send(Progress {
+                    job_id: jid,
+                    stage,
+                    percent: None,
+                    bytes: None,
+                    log: Some(l),
+                    warning: true,
+                });
+            }
+        });
+
+        // Stdout → JSON progress lines
+        for line in BufReader::new(out).lines() {
+            let line = match line {
+                Ok(l) if l.is_empty() => continue,
+                Ok(l) => l,
+                Err(_) => break,
+            };
+
+            if cancel.is_cancelled() {
+                #[cfg(unix)]
+                {
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(child.id() as i32),
+                        nix::sys::signal::Signal::SIGTERM,
+                    );
+                }
+                let _ = child.wait();
+                err_thread.join().ok();
+                return Err(None);
+            }
+
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                match val["type"].as_str() {
+                    Some("progress") => {
+                        let parsed_stage = parse_json_stage(val["stage"].as_str());
+                        let percent = val["percent"].as_f64().map(|p| p as f32);
+                        let log = val["log"].as_str().map(|s| s.to_string());
+                        let warning = val["warning"].as_bool().unwrap_or(false);
+                        let bytes = val["bytes"].as_array().and_then(|a| {
+                            if a.len() == 2 {
+                                Some((
+                                    a[0].as_u64().unwrap_or(0),
+                                    a[1].as_u64().unwrap_or(0),
+                                ))
+                            } else {
+                                None
+                            }
+                        });
+                        let _ = sink.send(Progress {
+                            job_id: jid,
+                            stage: parsed_stage,
+                            percent,
+                            bytes,
+                            log,
+                            warning,
+                        });
+                    }
+                    Some("result") => {
+                        let code = val["code"].as_i64().unwrap_or(1);
+                        err_thread.join().ok();
+                        let _ = child.wait();
+                        if code == 0 {
+                            return Ok(());
+                        } else {
+                            let msg = val["message"]
+                                .as_str()
+                                .unwrap_or("helper failed")
+                                .to_string();
+                            return Err(Some(Error::Priv(msg)));
+                        }
+                    }
+                    _ => {
+                        let _ = sink.send(Progress {
+                            job_id: jid,
+                            stage,
+                            percent: None,
+                            bytes: None,
+                            log: Some(line),
+                            warning: true,
+                        });
+                    }
+                }
+            } else {
+                let _ = sink.send(Progress {
+                    job_id: jid,
+                    stage,
+                    percent: None,
+                    bytes: None,
+                    log: Some(line),
+                    warning: true,
+                });
+            }
+        }
+
+        err_thread.join().ok();
+        let status = child.wait().unwrap_or_default();
+        let code = status.code().unwrap_or(-1);
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(Some(Error::Priv(format!("helper exit {code}"))))
+        }
+    }
+
+    fn fallback_pacman(
+        &self,
+        args: &[&str],
+        stage: Stage,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        let mut cmd = Command::new("pkexec");
+        cmd.args(["pacman"]);
+        cmd.args(args);
+        let (code, last_err) = self.run_stream(cmd, sink, cancel, stage)?;
         if code == 0 {
             Ok(())
         } else {
             let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("install exit {code}{why}")))
+            Err(Error::Priv(format!("pacman exit {code}{why}")))
+        }
+    }
+}
+
+impl PackageBackend for PacmanCli {
+    fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        let r = self.try_run_helper(
+            &["install", &id.name],
+            Stage::Installing,
+            sink,
+            cancel,
+        );
+        match r {
+            Ok(()) => Ok(()),
+            Err(Some(e)) => {
+                // Helper unavailable — fall back to CLI
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Installing,
+                    percent: None,
+                    bytes: None,
+                    log: Some(format!("helper unavailable ({e}); falling back to pacman CLI")),
+                    warning: true,
+                });
+                self.fallback_pacman(
+                    &["-S", "--noconfirm", "--needed", &id.name],
+                    Stage::Installing,
+                    sink,
+                    cancel,
+                )
+            }
+            Err(None) => Err(Error::Cancelled),
         }
     }
 
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        // First try the helper
+        match self.try_run_helper(&["refresh"], Stage::Refreshing, sink, cancel) {
+            Ok(()) => return Ok(()),
+            Err(Some(_)) => {}
+            Err(None) => return Err(Error::Cancelled),
+        }
+
+        // Fallback: pkexec pacman -Sy
         let try_pkexec = || -> Result<()> {
             let mut cmd = Command::new("pkexec");
             cmd.args(["pacman", "-Sy", "--noconfirm"]);
@@ -381,14 +576,31 @@ impl PackageBackend for PacmanCli {
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-Rns", "--noconfirm", &id.name]);
-        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Removing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("remove exit {code}{why}")))
+        let r = self.try_run_helper(
+            &["remove", &id.name],
+            Stage::Removing,
+            sink,
+            cancel,
+        );
+        match r {
+            Ok(()) => Ok(()),
+            Err(Some(e)) => {
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Removing,
+                    percent: None,
+                    bytes: None,
+                    log: Some(format!("helper unavailable ({e}); falling back to pacman CLI")),
+                    warning: true,
+                });
+                self.fallback_pacman(
+                    &["-Rns", "--noconfirm", &id.name],
+                    Stage::Removing,
+                    sink,
+                    cancel,
+                )
+            }
+            Err(None) => Err(Error::Cancelled),
         }
     }
 
@@ -440,14 +652,26 @@ impl PackageBackend for PacmanCli {
     }
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-Syu", "--noconfirm"]);
-        let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("upgrade-all exit {code}{why}")))
+        let r = self.try_run_helper(&["sysupgrade"], Stage::Installing, sink, cancel);
+        match r {
+            Ok(()) => Ok(()),
+            Err(Some(e)) => {
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Installing,
+                    percent: None,
+                    bytes: None,
+                    log: Some(format!("helper unavailable ({e}); falling back to pacman CLI")),
+                    warning: true,
+                });
+                self.fallback_pacman(
+                    &["-Syu", "--noconfirm"],
+                    Stage::Installing,
+                    sink,
+                    cancel,
+                )
+            }
+            Err(None) => Err(Error::Cancelled),
         }
     }
 }
