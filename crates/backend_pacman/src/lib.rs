@@ -134,7 +134,7 @@ impl PacmanCli {
         let tx1 = sink.clone();
         let tx2 = sink.clone();
 
-        let stage_out = stage.clone();
+        let stage_out = stage;
         let stage_err = stage;
 
         let last_err = Arc::new(Mutex::new(None::<String>));
@@ -145,7 +145,7 @@ impl PacmanCli {
             for l in BufReader::new(out).lines().filter_map(|r| r.ok()) {
                 let _ = tx1.send(Progress {
                     job_id: jid,
-                    stage: stage_out.clone(),
+                    stage: stage_out,
                     percent: None,
                     bytes: None,
                     log: Some(l),
@@ -163,7 +163,7 @@ impl PacmanCli {
                 }
                 let _ = tx2.send(Progress {
                     job_id: jid,
-                    stage: stage_err.clone(),
+                    stage: stage_err,
                     percent: None,
                     bytes: None,
                     log: Some(l),

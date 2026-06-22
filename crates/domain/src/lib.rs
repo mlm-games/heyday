@@ -42,7 +42,7 @@ pub struct PackageDetails {
     pub size_download: Option<u64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Stage {
     Queued,
     Refreshing,

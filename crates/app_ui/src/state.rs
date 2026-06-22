@@ -44,6 +44,11 @@ pub struct AppState {
     pub progress_log: String,
     pub log_expanded: bool,
     pub in_upgrades_view: bool,
+
+    /// Current operation stage, if any. Set to None when idle/finished/failed.
+    pub active_stage: Option<Stage>,
+    /// Current progress fraction (0.0–1.0), if known.
+    pub progress_pct: Option<f32>,
 }
 
 impl AppState {
@@ -251,12 +256,32 @@ impl Store {
             }
 
             Action::Progress(mut p) => {
-                if let Some(l) = p.log.take() {
-                    s.append_log(&l);
+                let log = p.log.take();
+                if let Some(ref l) = log {
+                    s.append_log(l);
                 }
+
+                match p.stage {
+                    Stage::Finished | Stage::Failed => {
+                        s.active_stage = None;
+                        s.progress_pct = None;
+                    }
+                    _ => {
+                        s.active_stage = Some(p.stage);
+                        s.progress_pct = p.percent.or_else(|| {
+                            p.bytes.and_then(|(cur, tot)| {
+                                if tot > 0 {
+                                    Some(cur as f32 / tot as f32)
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+                    }
+                }
+
                 if matches!(p.stage, Stage::Failed) {
-                    let msg = p
-                        .log
+                    let msg = log
                         .clone()
                         .and_then(|t| {
                             let t = t.trim().to_string();

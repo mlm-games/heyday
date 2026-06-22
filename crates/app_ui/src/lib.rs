@@ -3,7 +3,9 @@ use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
-use repose_material::material3::{Surface, SurfaceConfig};
+use repose_material::material3::{
+    LinearProgressIndicator, LinearProgressIndicatorConfig, Surface, SurfaceConfig,
+};
 use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
     scroll::{ScrollArea, remember_scroll_state},
@@ -381,33 +383,59 @@ fn details_body(det: &PackageDetails) -> View {
 fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
     let last = s.progress_log.lines().last().unwrap_or("Ready");
 
-    Row(Modifier::new()
-        .fill_max_width()
-        .padding(10.0)
-        .margin_vertical(4.0)
-        .background(Color::from_hex(CARD_BG))
-        .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-        .clip_rounded(R_MD))
-    .child((
-        Text("●")
-            .size(8.0)
-            .color(Color::from_hex(STATUS_DOT))
-            .modifier(Modifier::new().align_self_center().padding(4.0)),
-        Text(last.to_string())
-            .size(FONT_SM)
-            .color(Color::from_hex(TEXT_MUTED))
-            .modifier(Modifier::new().flex_grow(1.0).align_self_center()),
-        secondary_button(
-            if s.log_expanded {
-                "Hide log"
-            } else {
-                "Show log"
-            },
-            {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleLog)
-            },
-        ),
+    let indicator = if s.active_stage.is_some() {
+        if let Some(pct) = s.progress_pct {
+            LinearProgressIndicator(
+                Some(pct),
+                LinearProgressIndicatorConfig {
+                    color: Color::from_hex(BLUE_BORDER),
+                    track_color: Color::from_hex(CARD_BORDER),
+                    ..Default::default()
+                },
+            )
+        } else {
+            LinearProgressIndicator(
+                None,
+                LinearProgressIndicatorConfig {
+                    color: Color::from_hex(INDIGO),
+                    track_color: Color::from_hex(CARD_BORDER),
+                    ..Default::default()
+                },
+            )
+        }
+    } else {
+        Box(Modifier::new())
+    };
+
+    Column(Modifier::new().fill_max_width().margin_vertical(4.0)).child((
+        indicator,
+        Row(Modifier::new()
+            .fill_max_width()
+            .padding(10.0)
+            .background(Color::from_hex(CARD_BG))
+            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+            .clip_rounded(R_MD))
+        .child((
+            Text("●")
+                .size(8.0)
+                .color(Color::from_hex(STATUS_DOT))
+                .modifier(Modifier::new().align_self_center().padding(4.0)),
+            Text(last.to_string())
+                .size(FONT_SM)
+                .color(Color::from_hex(TEXT_MUTED))
+                .modifier(Modifier::new().flex_grow(1.0).align_self_center()),
+            secondary_button(
+                if s.log_expanded {
+                    "Hide log"
+                } else {
+                    "Show log"
+                },
+                {
+                    let store = store.clone();
+                    move || store.dispatch(Action::ToggleLog)
+                },
+            ),
+        )),
     ))
 }
 
