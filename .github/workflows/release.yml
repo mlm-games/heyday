@@ -44,28 +44,15 @@ jobs:
           fetch-depth: 0
 
       # Determine version/tag based on event:
-      # - push on tag vX.Y.Z: use that tag/version
-      # - workflow_dispatch: compute next patch from latest v*.*.* and create a new tag
+      # - push on tag vX.Y.Z: use that tag/version, don't bump Cargo.toml
+      # - workflow_dispatch: bump patch in Cargo.toml, commit, push
       - name: Set version/tag metadata
         id: meta
         shell: bash
         run: |
           set -euo pipefail
 
-          CARGO_TOML="Cargo.toml"
-
-          OLD_VERSION=$(grep -m1 '^version\s*=\s*"' "$CARGO_TOML" | sed -E 's/.*"([^"]+)".*/\1/')
-          if [[ -z "$OLD_VERSION" ]]; then
-            echo "Could not detect package.version in Cargo.toml" >&2
-            exit 1
-          fi
-          IFS='.' read -r MAJ MIN PAT <<<"$OLD_VERSION"; : "${MAJ:=0}" "${MIN:=0}" "${PAT:=0}"
-          NEW_VERSION="$MAJ.$MIN.$((PAT+1))"
-          sed -i -E "0,/^version\s*=.*/s//version = \"$NEW_VERSION\"/" "$CARGO_TOML"
-
-
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            # Expect refs/tags/vX.Y.Z
             ref_name="${GITHUB_REF_NAME}"
             if [[ ! "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "Invalid tag name: $ref_name (expected vX.Y.Z)" >&2
@@ -75,33 +62,28 @@ jobs:
             tag="$ref_name"
             commit_sha="$(git rev-parse HEAD)"
           else
-            # workflow_dispatch: compute next patch version and tag it
-            latest="$(git tag -l 'v*.*.*' | sort -V | tail -n1)"
-            if [[ -z "$latest" ]]; then
-              # initial version if none exists
-              maj=0; min=1; pat=0
-            else
-              latest_no_v="${latest#v}"
-              IFS='.' read -r maj min pat <<<"$latest_no_v"
-              : "${maj:=0}" "${min:=1}" "${pat:=0}"
-              pat=$((pat + 1))
+            CARGO_TOML="Cargo.toml"
+
+            OLD_VERSION=$(grep -m1 '^version\s*=\s*"' "$CARGO_TOML" | sed -E 's/.*"([^"]+)".*/\1/')
+            if [[ -z "$OLD_VERSION" ]]; then
+              echo "Could not detect package.version in Cargo.toml" >&2
+              exit 1
             fi
+            IFS='.' read -r MAJ MIN PAT <<<"$OLD_VERSION"; : "${MAJ:=0}" "${MIN:=0}" "${PAT:=0}"
+            NEW_VERSION="$MAJ.$MIN.$((PAT+1))"
+            sed -i -E "0,/^version\s*=.*/s//version = \"$NEW_VERSION\"/" "$CARGO_TOML"
 
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
 
-
             cargo update -w
             git add . || true
             git commit -m "Update cargo ver with lock"
-            git push 
-            version="${maj}.${min}.${pat}"
+            git push
+
+            version="$NEW_VERSION"
             tag="v${version}"
             commit_sha="$(git rev-parse HEAD)"
-
-            # Create and push the tag
-            git tag -a "$tag" -m "Release $tag"
-            git push origin "$tag"
           fi
 
           {
@@ -386,3 +368,20 @@ jobs:
             dist/**/*.zip
             dist/**/*.apk
             dist/SHA256SUMS.txt
+
+      - name: Dispatch aur-upload.yml
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload_releases == true) }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'aur-upload.yml',
+              ref: 'main',
+              inputs: {
+                version_name: '${{ needs.prepare-version.outputs.tag }}'
+              }
+            });
+            core.info('Triggered AUR upload for ${{ needs.prepare-version.outputs.tag }}');
