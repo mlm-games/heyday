@@ -8,10 +8,10 @@ use repose_core::{
     shortcuts::{self, ShortcutMap},
 };
 use repose_material::material3::{
-    AlertDialog, ButtonConfig, Divider, DividerConfig, FilledButton,
-    LinearProgressIndicator, LinearProgressIndicatorConfig, ListItem, ListItemConfig,
+    ButtonConfig, Divider, DividerConfig, FilledButton, LinearProgressIndicator,
+    LinearProgressIndicatorConfig, ListItem, ListItemConfig, OutlinedButton,
     OutlinedTextField, OutlinedTextFieldConfig, SegmentedButton, SegmentedButtonConfig, Segment,
-    Surface, SurfaceConfig,
+    Surface, SurfaceConfig, TopAppBar, TopAppBarConfig,
 };
 use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
@@ -28,36 +28,45 @@ pub mod widgets;
 const PANE_HEIGHT_DP: f32 = 520.0;
 
 fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
-    let th = theme();
-    Row(Modifier::new()
-        .fill_max_width()
-        .padding_values(PaddingValues { left: 16.0, right: 16.0, top: 8.0, bottom: 8.0 })
-        .background(th.surface_container))
-    .child(vec![
-        Text(if s.in_upgrades_view { "Upgrades" } else { "Soredowe" })
-            .size(22.0)
-            .color(th.on_surface)
-            .modifier(Modifier::new().align_self_center()),
-        Spacer(),
-        if s.in_upgrades_view && !s.results.is_empty() {
-            success_button("Upgrade all", {
-                let store = store.clone();
-                move || store.dispatch(Action::UpgradeAll)
-            })
-        } else {
-            Box(Modifier::new())
-        },
-        Space(Modifier::new().width(6.0)),
-        outline_button("Refresh", {
-            let store = store.clone();
-            move || store.dispatch(Action::Refresh)
-        }),
-        Space(Modifier::new().width(6.0)),
-        FilledButton(Modifier::new(), {
-            let store = store.clone();
-            move || store.dispatch(Action::Upgrades)
-        }, ButtonConfig::default(), || Text("Upgrades").size(14.0)),
-    ])
+    TopAppBar(
+        if s.in_upgrades_view { "Upgrades" } else { "Soredowe" },
+        None,
+        vec![
+            if s.in_upgrades_view && !s.results.is_empty() {
+                let content = Row(Modifier::new().align_items(AlignItems::Center).gap(8.0)).child((
+                    Icon(Symbol::new("", '\u{F090}')),
+                    Text("Upgrade all").size(14.0),
+                ));
+                FilledButton(Modifier::new(), {
+                    let store = store.clone();
+                    move || store.dispatch(Action::UpgradeAll)
+                }, ButtonConfig::default(), move || content)
+            } else {
+                Box(Modifier::new())
+            },
+            {
+                let content = Row(Modifier::new().align_items(AlignItems::Center).gap(8.0)).child((
+                    Icon(Symbol::new("", '\u{E5D5}')),
+                    Text("Refresh").size(14.0),
+                ));
+                OutlinedButton(Modifier::new(), {
+                    let store = store.clone();
+                    move || store.dispatch(Action::Refresh)
+                }, ButtonConfig::default(), move || content)
+            },
+            {
+                let content = Row(Modifier::new().align_items(AlignItems::Center).gap(8.0)).child((
+                    Icon(Symbol::new("", '\u{E8D7}')),
+                    Text("Upgrades").size(14.0),
+                ));
+                FilledButton(Modifier::new(), {
+                    let store = store.clone();
+                    move || store.dispatch(Action::Upgrades)
+                }, ButtonConfig::default(), move || content)
+            },
+        ],
+        TopAppBarConfig::default(),
+    )
 }
 
 fn search_section(store: &Rc<Store>, s: &AppState) -> View {
@@ -465,25 +474,26 @@ pub fn root_view(store: Rc<Store>) -> View {
             move || {
                 setup_shortcuts(&store);
 
-                let mut children: Vec<View> = vec![
+                Column(Modifier::new().fill_max_size()).child(vec![
                     top_bar(&store, &s),
                     Divider(DividerConfig::default()),
-                    search_section(&store, &s),
-                    Space(Modifier::new().height(8.0)),
-                    Row(Modifier::new()
-                        .fill_max_width()
-                        .flex_grow(1.0)
-                        .flex_basis(0.0))
-                    .child((
-                        Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
-                        Space(Modifier::new().width(8.0)),
-                        Box(Modifier::new().weight(3.0).padding(4.0))
-                            .child(details_pane(store.clone(), &s)),
-                    )),
-                    status_bar(&store, &s),
-                    log_panel(&s),
-                ];
-                Column(Modifier::new().fill_max_size().padding(16.0)).child(children)
+                    Column(Modifier::new().fill_max_width().flex_grow(1.0).padding(16.0)).child(vec![
+                        search_section(&store, &s),
+                        Space(Modifier::new().height(8.0)),
+                        Row(Modifier::new()
+                            .fill_max_width()
+                            .flex_grow(1.0)
+                            .flex_basis(0.0))
+                        .child((
+                            Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
+                            Space(Modifier::new().width(8.0)),
+                            Box(Modifier::new().weight(3.0).padding(4.0))
+                                .child(details_pane(store.clone(), &s)),
+                        )),
+                        status_bar(&store, &s),
+                        log_panel(&s),
+                    ]),
+                ])
             }
         },
     )
