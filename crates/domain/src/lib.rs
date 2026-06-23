@@ -100,6 +100,8 @@ pub enum Event {
     PacnewFiles(Vec<PacnewFile>),
     /// All available package groups across all repos.
     AvailableGroups(Vec<String>),
+    /// All installed packages.
+    InstalledPackages(Vec<PackageSummary>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -263,6 +265,14 @@ pub trait PackageBackend: Send + Sync {
     fn available_groups(&self) -> Vec<String> {
         vec![]
     }
+    /// List all installed packages.
+    fn list_installed(
+        &self,
+        _sink: &ProgressSink,
+        _cancel: &CancelToken,
+    ) -> Result<Vec<PackageSummary>> {
+        Err(Error::Internal("list_installed not implemented".into()))
+    }
     /// List orphaned packages (unused deps).
     fn orphans(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
         Err(Error::Internal("orphans not implemented".into()))
@@ -299,6 +309,7 @@ pub enum JobKind {
     Export,
     Pacnew,
     Verify,
+    ListInstalled,
 }
 
 #[derive(Clone, Debug)]
@@ -697,6 +708,14 @@ impl Executor {
                             let results = repo.verify(&tx_local, &cancel)?;
                             // Reuse ExportResult for now — shows verification output
                             let _ = tx_evt.send(Event::ExportResult(results));
+                            Ok(())
+                        }
+                        JobKind::ListInstalled => {
+                            let items = repo.list_installed(&tx_local, &cancel)?;
+                            let _ = tx_evt.send(Event::InstalledPackages(items));
+                            // Also send available groups
+                            let groups = repo.available_groups();
+                            let _ = tx_evt.send(Event::AvailableGroups(groups));
                             Ok(())
                         }
                         JobKind::Upgrades => {

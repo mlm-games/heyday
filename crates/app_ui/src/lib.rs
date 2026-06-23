@@ -28,12 +28,19 @@ const PANE_HEIGHT_DP: f32 = 520.0;
 
 fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
     let th = theme();
+    let title = if s.in_upgrades_view {
+        "Upgrades"
+    } else if s.in_installed_view {
+        "Installed"
+    } else {
+        "Soredowe"
+    };
     Row(Modifier::new()
         .fill_max_width()
         .padding_values(PaddingValues { left: 16.0, right: 16.0, top: 8.0, bottom: 8.0 })
         .background(th.surface_container))
     .child(vec![
-        Text(if s.in_upgrades_view { "Upgrades" } else { "Soredowe" })
+        Text(title)
             .size(22.0)
             .color(th.on_surface)
             .modifier(Modifier::new().align_self_center()),
@@ -61,6 +68,11 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             let store = store.clone();
             move || store.dispatch(Action::Upgrades)
         }, ButtonConfig::default(), || Text("Upgrades").size(14.0)),
+        Space(Modifier::new().width(6.0)),
+        outline_button("Installed", {
+            let store = store.clone();
+            move || store.dispatch(Action::ShowInstalled)
+        }),
         Space(Modifier::new().width(6.0)),
         outline_button("Cache", {
             let store = store.clone();
@@ -237,7 +249,9 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
     if s.results.is_empty() {
         return empty_state(
             "No results",
-            if s.query.trim().is_empty() {
+            if s.in_installed_view {
+                "No packages installed."
+            } else if s.query.trim().is_empty() {
                 "Search for a package or check upgrades."
             } else {
                 "No packages matched your query / filters."

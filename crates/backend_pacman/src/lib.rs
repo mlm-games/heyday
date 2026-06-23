@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use alpm_db::desc::DbDescFileV2;
+use alpm_db::desc::{DbDescFileV1, DbDescFileV2};
 use alpm_repo_db::desc::RepoDescFileV2;
 use flate2::read::GzDecoder;
 use parking_lot::Mutex;
@@ -36,6 +36,24 @@ fn parse_json_stage(s: Option<&str>) -> Stage {
 
 pub struct PacmanCli;
 
+fn parse_size(s: &str) -> Option<u64> {
+    // Parse pacman size strings like "12.34 MiB", "5.67 KiB", "1234.00  B"
+    let s = s.trim();
+    if s.is_empty() || s == "None" {
+        return None;
+    }
+    let (num_str, unit) = s.trim().split_once(' ').unwrap_or((s, ""));
+    let val: f64 = num_str.parse().ok()?;
+    let bytes = match unit.trim() {
+        "KiB" => val * 1024.0,
+        "MiB" => val * 1024.0 * 1024.0,
+        "GiB" => val * 1024.0 * 1024.0 * 1024.0,
+        "B" | "" => val,
+        _ => val,
+    };
+    Some(bytes as u64)
+}
+
 impl Default for PacmanCli {
     fn default() -> Self {
         Self::new()
@@ -47,7 +65,7 @@ impl PacmanCli {
         Self
     }
 
-    fn read_local_db() -> HashMap<String, DbDescFileV2> {
+    fn read_local_db() -> HashMap<String, DbDescFileV1> {
         let local_dir = Path::new(PACMAN_DB).join("local");
         let mut packages = HashMap::new();
         let dir = match fs::read_dir(&local_dir) {
@@ -64,11 +82,53 @@ impl PacmanCli {
                 Ok(c) => c,
                 Err(_) => continue,
             };
+            // Try V2 first (with %XDATA%), fall back to V1
             if let Ok(desc) = DbDescFileV2::from_str(&content) {
+                packages.insert(desc.name.to_string(), DbDescFileV1 {
+                    name: desc.name,
+                    version: desc.version,
+                    base: desc.base,
+                    description: desc.description,
+                    url: desc.url,
+                    arch: desc.arch,
+                    builddate: desc.builddate,
+                    installdate: desc.installdate,
+                    packager: desc.packager,
+                    size: desc.size,
+                    groups: desc.groups,
+                    reason: desc.reason,
+                    license: desc.license,
+                    validation: desc.validation,
+                    replaces: desc.replaces,
+                    depends: desc.depends,
+                    optdepends: desc.optdepends,
+                    conflicts: desc.conflicts,
+                    provides: desc.provides,
+                });
+            } else if let Ok(desc) = DbDescFileV1::from_str(&content) {
                 packages.insert(desc.name.to_string(), desc);
             }
         }
         packages
+    }
+
+    fn read_local_db_names() -> HashSet<String> {
+        // pacman -Qq is the authoritative source of installed package names.
+        // It always works regardless of desc file format issues.
+        let out = Command::new("pacman")
+            .args(["-Qq"])
+            .output()
+            .ok();
+        let mut names = HashSet::new();
+        if let Some(out) = out {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let n = line.trim();
+                if !n.is_empty() {
+                    names.insert(n.to_string());
+                }
+            }
+        }
+        names
     }
 
     fn read_sync_db(repo_path: &Path) -> HashMap<String, RepoDescFileV2> {
@@ -128,7 +188,13 @@ impl PacmanCli {
     }
 
     fn installed_names() -> HashSet<String> {
-        Self::read_local_db().into_keys().collect()
+        // Primary: parse directory names from /var/lib/pacman/local/<name>-<version>/
+        // This is more robust than parsing desc files which may fail on format issues.
+        let mut names = Self::read_local_db_names();
+        // Secondary: also include any names from desc file parsing
+        // (covers edge cases where dir name differs from internal name)
+        names.extend(Self::read_local_db().into_keys());
+        names
     }
 
     fn run_stream(
@@ -527,6 +593,59 @@ impl PacmanCli {
         Ok(results)
     }
 
+    pub fn list_installed() -> Result<Vec<PackageSummary>> {
+        let local_by_name = Self::read_local_db();
+        let sync_dbs = Self::read_all_sync_dbs();
+        let mut results = Vec::new();
+
+        // Use pacman -Qq as authoritative source of installed names
+        let out = Command::new("pacman")
+            .args(["-Qq"])
+            .output()
+            .map_err(|e| Error::Internal(format!("pacman -Qq: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::Alpm("pacman -Qq failed".into()));
+        }
+
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let name = line.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+
+            let version = local_by_name.get(&name)
+                .map(|p| p.version.to_string())
+                .unwrap_or_default();
+
+            let description = local_by_name.get(&name)
+                .map(|p| p.description.to_string())
+                .unwrap_or_default();
+
+            let mut groups: Vec<String> = Vec::new();
+            for packages in sync_dbs.values() {
+                if let Some(spkg) = packages.get(&name) {
+                    if spkg.version.to_string() == version {
+                        groups = spkg.groups.iter().map(|g| g.to_string()).collect();
+                    }
+                    break;
+                }
+            }
+
+            results.push(PackageSummary {
+                id: PackageId { name, source: Source::Repo },
+                version,
+                description,
+                groups,
+                installed: true,
+                popular: None,
+                last_updated: None,
+            });
+        }
+
+        results.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+        Ok(results)
+    }
+
     pub fn export_list() -> Result<String> {
         let out = Command::new("pacman")
             .args(["-Qqe"])
@@ -715,30 +834,78 @@ impl PackageBackend for PacmanCli {
         })
         .ok();
 
-        let q_lower = q.to_lowercase();
         let installed = Self::installed_names();
         let sync_dbs = Self::read_all_sync_dbs();
+        let q_lower = q.to_lowercase();
+
+        // Use pacman -Ssq as authoritative source (never drops packages due to desc parsing issues)
+        let out = match Command::new("pacman").args(["-Ssq", q]).output() {
+            Ok(o) => o,
+            Err(e) => {
+                sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Searching,
+                    percent: None,
+                    bytes: None,
+                    log: Some(format!("repo: pacman -Ssq failed: {e}"),),
+                    warning: true,
+                })
+                .ok();
+                return Ok(vec![]);
+            }
+        };
 
         let mut results: Vec<PackageSummary> = Vec::new();
 
-        for packages in sync_dbs.values() {
-            for pkg in packages.values() {
-                let name_lower = pkg.name.to_string().to_lowercase();
-                let desc_lower = pkg.description.to_string().to_lowercase();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let name = line.trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
 
-                if name_lower.contains(&q_lower) || desc_lower.contains(&q_lower) {
-                    results.push(PackageSummary {
-                        id: PackageId {
-                            name: pkg.name.to_string(),
-                            source: Source::Repo,
-                        },
-                        version: pkg.version.to_string(),
-                        description: pkg.description.to_string(),
-                        groups: pkg.groups.iter().map(|g| g.to_string()).collect(),
-                        installed: installed.contains(pkg.name.to_string().as_str()),
-                        popular: None,
-                        last_updated: None,
-                    });
+            let mut version = String::new();
+            let mut description = String::new();
+            let mut groups: Vec<String> = Vec::new();
+            // Enrich with sync DB data
+            for packages in sync_dbs.values() {
+                if let Some(spkg) = packages.get(&name) {
+                    version = spkg.version.to_string();
+                    description = spkg.description.to_string();
+                    groups = spkg.groups.iter().map(|g| g.to_string()).collect();
+                    break;
+                }
+            }
+
+            results.push(PackageSummary {
+                id: PackageId { name, source: Source::Repo },
+                version,
+                description,
+                groups,
+                installed: installed.contains(line.trim()),
+                popular: None,
+                last_updated: None,
+            });
+        }
+
+        // Also search descriptions from sync DBs for packages not found by -Ssq
+        if results.is_empty() {
+            for packages in sync_dbs.values() {
+                for pkg in packages.values() {
+                    let name = pkg.name.to_string();
+                    let desc_lower = pkg.description.to_string().to_lowercase();
+                    if desc_lower.contains(&q_lower)
+                        && !results.iter().any(|r| r.id.name == name)
+                    {
+                        results.push(PackageSummary {
+                            id: PackageId { name, source: Source::Repo },
+                            version: pkg.version.to_string(),
+                            description: pkg.description.to_string(),
+                            groups: pkg.groups.iter().map(|g| g.to_string()).collect(),
+                            installed: installed.contains(pkg.name.to_string().as_str()),
+                            popular: None,
+                            last_updated: None,
+                        });
+                    }
                 }
             }
         }
@@ -777,38 +944,129 @@ impl PackageBackend for PacmanCli {
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<PackageDetails> {
-        let sync_dbs = Self::read_all_sync_dbs();
+        // Try pacman -Si first (repos), fall back to -Qi (installed-only)
+        let out = Command::new("pacman")
+            .args(["-Si", &id.name])
+            .output()
+            .and_then(|o| if o.status.success() { Ok(o) } else {
+                Command::new("pacman").args(["-Qi", &id.name]).output()
+            })
+            .map_err(|e| Error::Internal(format!("pacman -Si/-Qi: {e}")))?;
 
-        for packages in sync_dbs.values() {
-            if let Some(pkg) = packages.get(&id.name) {
-                return Ok(PackageDetails {
-                    summary: PackageSummary {
-                        id: id.clone(),
-                        version: pkg.version.to_string(),
-                        description: pkg.description.to_string(),
-                        groups: pkg.groups.iter().map(|g| g.to_string()).collect(),
-                        installed: false,
-                        popular: None,
-                        last_updated: None,
-                    },
-                    depends: pkg.dependencies.iter().map(|d| d.to_string()).collect(),
-                    opt_depends: pkg
-                        .optional_dependencies
-                        .iter()
-                        .map(|d| d.to_string())
-                        .collect(),
-                    homepage: pkg.url.as_ref().map(|u| u.to_string()),
-                    maintainer: Some(pkg.packager.to_string()),
-                    size_install: Some(pkg.installed_size),
-                    size_download: Some(pkg.compressed_size),
-                });
+        if !out.status.success() {
+            return Err(Error::Alpm(format!(
+                "package {} not found", id.name
+            )));
+        }
+
+        let s = String::from_utf8_lossy(&out.stdout);
+        let installed = Self::installed_names().contains(&id.name);
+
+        // Extract fields from pacman -Si/-Qi output
+        let mut version = String::new();
+        let mut description = String::new();
+        let mut groups: Vec<String> = Vec::new();
+        let mut depends: Vec<String> = Vec::new();
+        let mut opt_depends: Vec<String> = Vec::new();
+        let mut homepage = None;
+        let mut size_install = None;
+        let mut size_download = None;
+        let mut maintainer = None;
+
+        let mut in_dep = false;
+        let mut in_opt = false;
+
+        for raw in s.lines() {
+            let line = raw.trim_end();
+            if let Some(v) = line.strip_prefix("Version         :") {
+                version = v.trim().to_string();
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("Description     :") {
+                description = v.trim().to_string();
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("Groups          :") {
+                let v = v.trim();
+                if v != "None" {
+                    groups = v.split_whitespace().map(|s| s.to_string()).collect();
+                }
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("URL             :") {
+                let v = v.trim();
+                if !v.is_empty() && v != "None" {
+                    homepage = Some(v.to_string());
+                }
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("Licenses        :") {
+                // skip
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("Depends On      :") {
+                in_dep = true; in_opt = false;
+                let v = v.trim();
+                if v != "None" {
+                    for tok in v.split_whitespace() {
+                        let n = tok.split(|c| c == '<' || c == '>' || c == '=').next().unwrap_or("").trim();
+                        if !n.is_empty() { depends.push(n.to_string()); }
+                    }
+                }
+            } else if let Some(v) = line.strip_prefix("Optional Deps   :") {
+                in_dep = false; in_opt = true;
+                let v = v.trim();
+                if !v.is_empty() {
+                    if let Some(name) = v.split(':').next() {
+                        let n = name.trim();
+                        if !n.is_empty() { opt_depends.push(n.to_string()); }
+                    }
+                }
+            } else if let Some(v) = line.strip_prefix("Required By     :") {
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("Optional For    :") {
+                in_dep = false; in_opt = false;
+            } else if let Some(v) = line.strip_prefix("Installed Size  :") {
+                in_dep = false; in_opt = false;
+                size_install = parse_size(v);
+            } else if let Some(v) = line.strip_prefix("Download Size   :") {
+                in_dep = false; in_opt = false;
+                size_download = parse_size(v);
+            } else if let Some(v) = line.strip_prefix("Packager        :") {
+                let v = v.trim();
+                if !v.is_empty() && v != "None" {
+                    maintainer = Some(v.to_string());
+                }
+                in_dep = false; in_opt = false;
+            } else if line.starts_with(' ') || line.starts_with('\t') {
+                if in_dep {
+                    for tok in line.split_whitespace() {
+                        let n = tok.split(|c| c == '<' || c == '>' || c == '=').next().unwrap_or("").trim();
+                        if !n.is_empty() { depends.push(n.to_string()); }
+                    }
+                } else if in_opt {
+                    if let Some(name) = line.split(':').next() {
+                        let n = name.trim();
+                        if !n.is_empty() { opt_depends.push(n.to_string()); }
+                    }
+                }
+            } else {
+                in_dep = false; in_opt = false;
             }
         }
 
-        Err(Error::Alpm(format!(
-            "package {} not found in repos",
-            id.name
-        )))
+        Ok(PackageDetails {
+            summary: PackageSummary {
+                id: id.clone(),
+                version,
+                description,
+                groups,
+                installed,
+                popular: None,
+                last_updated: None,
+            },
+            depends,
+            opt_depends,
+            homepage,
+            maintainer,
+            size_install,
+            size_download,
+        })
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -954,5 +1212,11 @@ impl PackageBackend for PacmanCli {
         let _ = sink;
         let _ = cancel;
         Self::verify_packages()
+    }
+
+    fn list_installed(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        let _ = sink;
+        let _ = cancel;
+        Self::list_installed()
     }
 }

@@ -44,6 +44,7 @@ pub struct AppState {
     pub progress_log: String,
     pub log_expanded: bool,
     pub in_upgrades_view: bool,
+    pub in_installed_view: bool,
 
     /// Current operation stage, if any. Set to None when idle/finished/failed.
     pub active_stage: Option<Stage>,
@@ -179,6 +180,7 @@ pub enum Action {
     /// Guard: remove options confirmation before proceeding.
     RequestRemove { id: PackageId, cascade: bool, keep_config: bool, remove_optdeps: bool },
     SetGroupFilter(Option<String>),
+    ShowInstalled,
 }
 
 pub struct Store {
@@ -227,6 +229,10 @@ impl Store {
         self.send_job(JobKind::Upgrades, JobPayload::None);
     }
 
+    fn send_installed(&self) {
+        self.send_job(JobKind::ListInstalled, JobPayload::None);
+    }
+
     fn send_details(&self, id: &PackageId) {
         self.send_job(JobKind::Details, JobPayload::Package(id.clone()));
     }
@@ -234,6 +240,8 @@ impl Store {
     fn refresh_current_view(&self, s: &AppState) {
         if s.in_upgrades_view {
             self.send_upgrades();
+        } else if s.in_installed_view {
+            self.send_installed();
         } else if !s.query.trim().is_empty() {
             self.send_search(&s.query);
         }
@@ -279,6 +287,7 @@ impl Store {
 
             Action::Search => {
                 s.in_upgrades_view = false;
+                s.in_installed_view = false;
                 s.detail = None;
                 let q = s.query.trim().to_string();
                 self.send_search(&q);
@@ -296,8 +305,17 @@ impl Store {
 
             Action::Upgrades => {
                 s.in_upgrades_view = true;
+                s.in_installed_view = false;
                 s.detail = None;
                 self.send_upgrades();
+            }
+
+            Action::ShowInstalled => {
+                s.in_upgrades_view = false;
+                s.in_installed_view = true;
+                s.detail = None;
+                s.active_group = None;
+                self.send_installed();
             }
 
             Action::UpgradeAll => {
@@ -358,6 +376,7 @@ impl Store {
             Action::Event(e) => match e {
                 Event::SearchResults { items, .. } => {
                     s.in_upgrades_view = false;
+                    s.in_installed_view = false;
                     let q = s.query.to_lowercase();
                     s.raw_results = items
                         .into_iter()
@@ -411,6 +430,14 @@ impl Store {
                 }
                 Event::AvailableGroups(groups) => {
                     s.available_groups = groups;
+                }
+                Event::InstalledPackages(items) => {
+                    s.in_upgrades_view = false;
+                    s.in_installed_view = true;
+                    s.raw_results = items;
+                    s.refilter();
+                    s.selected = None;
+                    s.detail = None;
                 }
             },
 
