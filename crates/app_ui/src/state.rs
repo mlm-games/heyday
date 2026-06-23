@@ -198,11 +198,17 @@ impl Store {
                         material3::Snackbar(
                             msg.clone(),
                             None,
-                            Modifier::new()
-                                .absolute()
-                                .offset(Some(16.0), None, Some(16.0), Some(16.0))
-                                .background(snackbar_theme.error_container),
-                            material3::SnackbarConfig::default(),
+                            Modifier::new().absolute().offset(
+                                Some(16.0),
+                                None,
+                                Some(16.0),
+                                Some(16.0),
+                            ),
+                            material3::SnackbarConfig {
+                                container_color: snackbar_theme.error_container,
+                                content_color: snackbar_theme.on_error_container,
+                                ..Default::default()
+                            },
                         )
                     })
                 }),
