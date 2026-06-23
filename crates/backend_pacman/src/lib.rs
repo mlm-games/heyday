@@ -28,6 +28,7 @@ impl PacmanCli {
                     id: PackageId {
                         name: c["name"].to_string(),
                         source: Source::Repo,
+                        repo: Default::default(),
                     },
                     version: c["new"].to_string(),
                     description: String::new(),
@@ -85,6 +86,7 @@ impl PacmanCli {
                 id: PackageId {
                     name: name.to_string(),
                     source: Source::Repo,
+                    repo: None,
                 },
                 version: String::new(),
                 description: String::new(),
@@ -126,8 +128,7 @@ fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
         Regex::new(r"^(?P<repo>\S+)/(?P<name>\S+)\s+(?P<ver>\S+)(?:\s+\[installed.*\])?\s*$")
             .unwrap()
     });
-    static RE_INST: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\[installed").unwrap());
+    static RE_INST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[installed").unwrap());
     let mut res = Vec::new();
     let mut last: Option<PackageSummary> = None;
     for line in out.lines() {
@@ -139,6 +140,7 @@ fn parse_pacman_search(out: &str) -> Vec<PackageSummary> {
                 id: PackageId {
                     name,
                     source: Source::Repo,
+                    repo: Some(c["repo"].to_string()),
                 },
                 version: ver,
                 description: String::new(),
@@ -368,8 +370,13 @@ impl PacmanCli {
 
 impl PackageBackend for PacmanCli {
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        let pkg = id
+            .repo
+            .as_ref()
+            .map(|r| format!("{r}/{}", id.name))
+            .unwrap_or_else(|| id.name.clone());
         let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &id.name]);
+        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &pkg]);
         let (code, last_err) = self.run_stream(cmd, sink, cancel, Stage::Installing)?;
         if code == 0 {
             Ok(())
@@ -530,8 +537,13 @@ impl PackageBackend for PacmanCli {
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<PackageDetails> {
+        let pkg = id
+            .repo
+            .as_ref()
+            .map(|r| format!("{r}/{}", id.name))
+            .unwrap_or_else(|| id.name.clone());
         let out = Command::new("pacman")
-            .args(["-Si", &id.name])
+            .args(["-Si", &pkg])
             .output()
             .map_err(|e| Error::Internal(e.to_string()))?;
         if !out.status.success() {
@@ -606,5 +618,3 @@ impl PackageBackend for PacmanCli {
         }
     }
 }
-
-

@@ -19,6 +19,7 @@ pub enum Source {
 pub struct PackageId {
     pub name: String,
     pub source: Source,
+    pub repo: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

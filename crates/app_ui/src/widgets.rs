@@ -2,6 +2,7 @@
 //! No function here knows about `Store` or `Action`.
 
 use crate::theme::*;
+use domain::{PackageSummary, Source};
 use repose_core::*;
 use repose_material::material3::Button;
 use repose_ui::*;
@@ -32,8 +33,29 @@ pub fn repo_badge() -> View {
 pub fn installed_badge() -> View {
     badge("Installed", INDIGO, INDIGO_BG)
 }
-pub fn source_badge(is_aur: bool) -> View {
-    if is_aur { aur_badge() } else { repo_badge() }
+fn repo_colors(repo: &str) -> (&'static str, &'static str) {
+    match repo {
+        "core" => ("#FCD34D", "#451A03"),
+        "extra" => ("#60A5FA", "#1E3A5F"),
+        "community" => ("#34D399", "#064E3B"),
+        "multilib" => ("#F472B6", "#4A0E4E"),
+        "testing" => ("#FBBF24", "#422006"),
+        _ => (TEAL, TEAL_BG),
+    }
+}
+
+pub fn source_badge(pkg: &PackageSummary) -> View {
+    match pkg.id.source {
+        Source::Aur => aur_badge(),
+        Source::Repo => {
+            if let Some(repo) = &pkg.id.repo {
+                let (fg, bg) = repo_colors(repo);
+                badge(repo, fg, bg)
+            } else {
+                repo_badge()
+            }
+        }
+    }
 }
 
 pub fn chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {

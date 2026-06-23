@@ -156,6 +156,7 @@ impl PackageBackend for AurBackend {
                 id: PackageId {
                     name: p.name.clone(),
                     source: Source::Aur,
+                    repo: Default::default(),
                 },
                 version: p.version,
                 description: p.description.unwrap_or_default(),
@@ -195,6 +196,7 @@ impl PackageBackend for AurBackend {
             id: PackageId {
                 name: p.name.clone(),
                 source: Source::Aur,
+                repo: None,
             },
             version: p.version,
             description: p.description.unwrap_or_default(),
@@ -275,7 +277,11 @@ impl PackageBackend for AurBackend {
         let srcinfo = String::from_utf8_lossy(&out.stdout);
         let deps = parse_srcinfo_deps(&srcinfo);
         if !deps.is_empty() {
-            send_log(Stage::Resolving, &format!("preinstalling deps: {}", deps.join(", ")), false);
+            send_log(
+                Stage::Resolving,
+                &format!("preinstalling deps: {}", deps.join(", ")),
+                false,
+            );
             let dep_status = Command::new("pkexec")
                 .args(["pacman", "-S", "--noconfirm", "--needed"])
                 .args(deps.iter().map(|s| s.as_str()))
@@ -284,18 +290,29 @@ impl PackageBackend for AurBackend {
                 Ok(s) if !s.success() => {
                     send_log(
                         Stage::Resolving,
-                        &format!("preinstall deps exited with code {}", s.code().unwrap_or(-1)),
+                        &format!(
+                            "preinstall deps exited with code {}",
+                            s.code().unwrap_or(-1)
+                        ),
                         true,
                     );
                 }
                 Err(e) => {
-                    send_log(Stage::Resolving, &format!("preinstall deps failed: {e}"), true);
+                    send_log(
+                        Stage::Resolving,
+                        &format!("preinstall deps failed: {e}"),
+                        true,
+                    );
                 }
                 _ => {}
             }
         }
 
-        send_log(Stage::Building, &format!("running makepkg for {}", id.name), false);
+        send_log(
+            Stage::Building,
+            &format!("running makepkg for {}", id.name),
+            false,
+        );
 
         // Build package (no -i here)
         let status = Command::new("makepkg")
@@ -307,11 +324,15 @@ impl PackageBackend for AurBackend {
             return Err(Error::Aur("makepkg failed".into()));
         }
 
-        send_log(Stage::Installing, &format!("installing {} via pacman -U", id.name), false);
+        send_log(
+            Stage::Installing,
+            &format!("installing {} via pacman -U", id.name),
+            false,
+        );
 
         // Install artifact via pacman -U
-        let pkg =
-            find_built_pkg(&id.name, &dir).ok_or_else(|| Error::Aur("no built package found".into()))?;
+        let pkg = find_built_pkg(&id.name, &dir)
+            .ok_or_else(|| Error::Aur("no built package found".into()))?;
         let pkg_str = pkg
             .to_str()
             .ok_or_else(|| Error::Internal("non-UTF-8 built package path".into()))?
@@ -358,5 +379,3 @@ impl PackageBackend for AurBackend {
         Ok(())
     }
 }
-
-

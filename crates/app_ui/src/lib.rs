@@ -200,7 +200,7 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
                     .size(FONT_LG)
                     .color(Color::from_hex(TEXT_PRIMARY)),
                 Space(Modifier::new().width(8.0)),
-                source_badge(is_aur),
+                source_badge(&pkg),
                 Space(Modifier::new().width(4.0)),
                 if pkg.installed {
                     installed_badge()
@@ -286,15 +286,13 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
         None => return empty_state("Package details", "Selection not in current results."),
     };
 
-    let is_aur = summary.id.source == Source::Aur;
-
     let header = Column(Modifier::new().fill_max_width()).child((
         Row(Modifier::new()).child((
             Text(summary.id.name.clone())
                 .size(FONT_XL)
                 .color(Color::from_hex(TEXT_PRIMARY)),
             Space(Modifier::new().width(8.0)),
-            source_badge(is_aur),
+            source_badge(&summary),
             Space(Modifier::new().width(4.0)),
             if summary.installed {
                 installed_badge()
