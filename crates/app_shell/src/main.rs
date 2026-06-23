@@ -18,6 +18,7 @@ use app_ui::{
 };
 use backend_alpm::AlpmBackend;
 use backend_aur::AurBackend;
+use backend_flatpak::FlatpakBackend;
 use domain::{Executor, PackageBackend};
 use log::error;
 use repose_platform::run_desktop_app;
@@ -33,9 +34,13 @@ fn main() -> anyhow::Result<()> {
 
     let repo: Arc<dyn PackageBackend> = Arc::new(AlpmBackend::new());
     let aur: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
+    let flatpak_user: Arc<dyn PackageBackend> = Arc::new(FlatpakBackend::new(true));
 
-    let backends: Vec<(&'static str, Arc<dyn PackageBackend>)> =
-        vec![(repo.name(), repo), (aur.name(), aur)];
+    let backends: Vec<(&'static str, Arc<dyn PackageBackend>)> = vec![
+        (repo.name(), repo),
+        (aur.name(), aur),
+        (flatpak_user.name(), flatpak_user),
+    ];
 
     Executor::new(backends, tx_prog.clone(), tx_evt.clone(), rx_jobs).run();
 

@@ -22,6 +22,7 @@ env_logger.workspace = true
 domain = { path = "../domain" }
 backend_alpm = { path = "../backend_alpm" }
 backend_aur = { path = "../backend_aur" }
+backend_flatpak = { path = "../backend_flatpak" }
 app_ui = { path = "../app_ui" }
 notify.workspace = true
 log.workspace = true
