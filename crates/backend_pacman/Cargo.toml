@@ -5,10 +5,6 @@ edition.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
+regex.workspace = true
 nix.workspace = true
 parking_lot.workspace = true
-alpm-db.workspace = true
-alpm-repo-db.workspace = true
-alpm-types.workspace = true
-flate2.workspace = true
-tar.workspace = true
