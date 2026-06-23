@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/domain",
+  "crates/backend_alpm",
   "crates/backend_pacman",
   "crates/backend_aur",
   "crates/app_ui",
@@ -26,6 +27,7 @@ urlencoding = "2"
 tempfile = "3"
 notify = "8"
 log = "0.4"
+alpm = "5"
 repose-ui = "0.19.0"
 repose-core = "0.19.0"
 repose-platform = { version = "0.19.0" }

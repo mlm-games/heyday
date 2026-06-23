@@ -1,0 +1,11 @@
+[package]
+name = "backend_alpm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+alpm.workspace = true
+regex.workspace = true
+nix.workspace = true
+parking_lot.workspace = true

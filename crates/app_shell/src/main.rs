@@ -16,8 +16,8 @@ use app_ui::{
     root_view,
     state::{Action, Store},
 };
+use backend_alpm::AlpmBackend;
 use backend_aur::AurBackend;
-use backend_pacman::PacmanCli;
 use domain::{Executor, PackageBackend};
 use log::error;
 use repose_platform::run_desktop_app;
@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     let (tx_evt, rx_evt) = chan::unbounded();
     let (tx_watch, rx_watch) = chan::unbounded::<()>();
 
-    let repo_backend: Arc<dyn PackageBackend> = Arc::new(PacmanCli::new());
+    let repo_backend: Arc<dyn PackageBackend> = Arc::new(AlpmBackend::new());
     let aur_backend: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
     Executor::new(
         repo_backend,
