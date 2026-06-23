@@ -2,6 +2,8 @@
 //! No function here knows about `Store` or `Action`.
 
 use crate::theme::*;
+use bigcolor::BigColor;
+use colorhash::ColorHash;
 use domain::{PackageSummary, Source};
 use repose_core::*;
 use repose_material::material3::Button;
@@ -33,15 +35,22 @@ pub fn repo_badge() -> View {
 pub fn installed_badge() -> View {
     badge("Installed", INDIGO, INDIGO_BG)
 }
-fn repo_colors(repo: &str) -> (&'static str, &'static str) {
-    match repo {
-        "core" => ("#FCD34D", "#451A03"),
-        "extra" => ("#60A5FA", "#1E3A5F"),
-        "community" => ("#34D399", "#064E3B"),
-        "multilib" => ("#F472B6", "#4A0E4E"),
-        "testing" => ("#FBBF24", "#422006"),
-        _ => (TEAL, TEAL_BG),
+fn repo_colors(repo: &str) -> (String, String) {
+    if let Some(c) = match repo {
+        "core" => Some(("#FCD34D", "#451A03")),
+        "extra" => Some(("#60A5FA", "#1E3A5F")),
+        "community" => Some(("#34D399", "#064E3B")),
+        "multilib" => Some(("#F472B6", "#4A0E4E")),
+        "testing" => Some(("#FBBF24", "#422006")),
+        _ => None,
+    } {
+        return (c.0.into(), c.1.into());
     }
+
+    let rgb = ColorHash::new().lightness(0.14).saturation(0.55).rgb(repo);
+    let bg = BigColor::from_rgb(rgb.red() as u8, rgb.green() as u8, rgb.blue() as u8, 1.0);
+    let fg = bg.get_contrast_color(1.0);
+    (fg.to_hex_string(false), bg.to_hex_string(false))
 }
 
 pub fn source_badge(pkg: &PackageSummary) -> View {
@@ -50,7 +59,7 @@ pub fn source_badge(pkg: &PackageSummary) -> View {
         Source::Repo => {
             if let Some(repo) = &pkg.id.repo {
                 let (fg, bg) = repo_colors(repo);
-                badge(repo, fg, bg)
+                badge(repo, &fg, &bg)
             } else {
                 repo_badge()
             }
@@ -81,35 +90,33 @@ pub fn chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {
 }
 
 pub fn primary_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(
-        pill(BLUE_BG, BLUE_BORDER),
-        on_click,
-        || Text(label).size(FONT_BASE).color(Color::from_hex(TEXT_PRIMARY)),
-    )
+    Button(pill(BLUE_BG, BLUE_BORDER), on_click, || {
+        Text(label)
+            .size(FONT_BASE)
+            .color(Color::from_hex(TEXT_PRIMARY))
+    })
 }
 
 pub fn secondary_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(
-        pill(CHIP_OFF_BG, CHIP_OFF_BORDER),
-        on_click,
-        || Text(label).size(FONT_BASE).color(Color::from_hex(TEXT_MUTED)),
-    )
+    Button(pill(CHIP_OFF_BG, CHIP_OFF_BORDER), on_click, || {
+        Text(label)
+            .size(FONT_BASE)
+            .color(Color::from_hex(TEXT_MUTED))
+    })
 }
 
 pub fn success_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(
-        pill(GREEN_BG, GREEN_BORDER),
-        on_click,
-        || Text(label).size(FONT_BASE).color(Color::from_hex(TEXT_PRIMARY)),
-    )
+    Button(pill(GREEN_BG, GREEN_BORDER), on_click, || {
+        Text(label)
+            .size(FONT_BASE)
+            .color(Color::from_hex(TEXT_PRIMARY))
+    })
 }
 
 pub fn danger_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(
-        pill(RED_BG, RED_BORDER),
-        on_click,
-        || Text(label).size(FONT_BASE).color(Color::from_hex(RED)),
-    )
+    Button(pill(RED_BG, RED_BORDER), on_click, || {
+        Text(label).size(FONT_BASE).color(Color::from_hex(RED))
+    })
 }
 
 pub fn divider() -> View {
