@@ -173,6 +173,11 @@ pub trait PackageBackend: Send + Sync {
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
+
+    /// Install a local file (AppImage, flatpakref, pkg.tar.zst, etc.)
+    fn install_file(&self, _path: &str, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
+        Err(Error::Internal("install_file not supported".into()))
+    }
 }
 
 /// What kind of operation to perform.
@@ -202,6 +207,7 @@ pub enum JobKind {
     Upgrades,
     Upgrade,
     UpgradeAll,
+    InstallFile,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +215,7 @@ pub enum JobPayload {
     None,
     Query(String),
     Package(PackageId),
+    InstallFile(String),
 }
 
 #[derive(Clone, Debug)]
@@ -446,6 +453,29 @@ impl Executor {
                             }
                             Ok(())
                         }
+                        JobKind::InstallFile => {
+                            if let JobPayload::InstallFile(path) = &job.payload {
+                                let ext = std::path::Path::new(path)
+                                    .extension()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("");
+                                let backend = match ext {
+                                    "AppImage" => selected.iter().find(|(name, _)| *name == "appimage").map(|(_, b)| &**b),
+                                    "zst" if path.ends_with(".pkg.tar.zst") => {
+                                        selected.iter().find(|(name, _)| *name == "alpm").map(|(_, b)| &**b)
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(b) = backend {
+                                    b.install_file(path, &tx_local, &cancel)
+                                } else {
+                                    send_direct(Stage::Failed, Some(format!("no backend for file: {path}")), true);
+                                    Err(Error::Internal(format!("no backend for file: {path}")))
+                                }
+                            } else {
+                                Ok(())
+                            }
+                        }
                     }
                 };
 
@@ -457,7 +487,8 @@ impl Executor {
                         JobKind::Install
                         | JobKind::Remove
                         | JobKind::Upgrade
-                        | JobKind::UpgradeAll => {
+                        | JobKind::UpgradeAll
+                        | JobKind::InstallFile => {
                             let _ = tx_evt.send(Event::SystemChanged);
                         }
                         _ => {}

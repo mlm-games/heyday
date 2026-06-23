@@ -431,6 +431,15 @@ impl PackageBackend for AlpmBackend {
         pkexec_pacman(&["-Syu", "--noconfirm"], sink, cancel, Stage::Installing)
     }
 
+    fn install_file(
+        &self,
+        path: &str,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        pkexec_pacman(&["-U", "--noconfirm", path], sink, cancel, Stage::Installing)
+    }
+
     fn operation(
         &self,
         op: &Operation,

@@ -6,7 +6,9 @@ use repose_core::*;
 use repose_material::material3::{
     LinearProgressIndicator, LinearProgressIndicatorConfig, Surface, SurfaceConfig,
 };
-use repose_navigation::{NavDisplay, Navigator, NavTransition, EntryScope, renderer, remember_back_stack};
+use repose_navigation::{
+    EntryScope, NavDisplay, NavTransition, Navigator, remember_back_stack, renderer,
+};
 use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
     scroll::{ScrollArea, remember_scroll_state},
@@ -37,7 +39,7 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             top: 12.0,
             bottom: 12.0,
         }))
-    .child((
+    .child(vec![
         Text(title)
             .size(FONT_2XL)
             .color(Color::from_hex(TEXT_PRIMARY))
@@ -52,6 +54,11 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             Box(Modifier::new())
         },
         Space(Modifier::new().width(8.0)),
+        secondary_button("Install File", {
+            let store = store.clone();
+            move || store.dispatch(Action::PickFile)
+        }),
+        Space(Modifier::new().width(8.0)),
         secondary_button("Refresh", {
             let store = store.clone();
             move || store.dispatch(Action::Refresh)
@@ -61,7 +68,7 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             let store = store.clone();
             move || store.dispatch(Action::Upgrades)
         }),
-    ))
+    ])
 }
 
 fn search_section(store: &Rc<Store>, s: &AppState) -> View {
@@ -206,19 +213,19 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, _selected: bool, upgrades_mode
         pkg_avatar(&pkg.id.name, AVATAR_SIZE),
         Space(Modifier::new().width(12.0)),
         Column(Modifier::new().flex_grow(1.0)).child((
-        Row(Modifier::new().align_items(AlignItems::Center)).child((
-            Text(pkg.id.name.clone())
-                .size(FONT_LG)
-                .color(Color::from_hex(TEXT_PRIMARY)),
-            Space(Modifier::new().width(8.0)),
-            source_badge(&pkg),
-            Space(Modifier::new().width(4.0)),
-            if pkg.installed {
-                installed_badge()
-            } else {
-                Box(Modifier::new())
-            },
-        )),
+            Row(Modifier::new().align_items(AlignItems::Center)).child((
+                Text(pkg.id.name.clone())
+                    .size(FONT_LG)
+                    .color(Color::from_hex(TEXT_PRIMARY)),
+                Space(Modifier::new().width(8.0)),
+                source_badge(&pkg),
+                Space(Modifier::new().width(4.0)),
+                if pkg.installed {
+                    installed_badge()
+                } else {
+                    Box(Modifier::new())
+                },
+            )),
             Space(Modifier::new().height(4.0)),
             Text(pkg.description.clone())
                 .size(FONT_SM)
@@ -314,8 +321,17 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
     ScrollArea(
         Modifier::new().fill_max_size().padding(24.0),
         scroll,
-        Column(Modifier::new().fill_max_size().max_width(780.0).align_self_center()).child((
-            Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
+        Column(
+            Modifier::new()
+                .fill_max_size()
+                .max_width(780.0)
+                .align_self_center(),
+        )
+        .child((
+            Row(Modifier::new()
+                .fill_max_width()
+                .align_items(AlignItems::Center))
+            .child((
                 secondary_button("Back", {
                     let store = store.clone();
                     move || store.dispatch(Action::ClearSelection)
@@ -396,14 +412,16 @@ fn details_body(det: &PackageDetails) -> View {
     }
     if !info_rows.is_empty() {
         rows.push(
-            Column(Modifier::new()
-                .fill_max_width()
-                .padding(12.0)
-                .margin_vertical(8.0)
-                .background(Color::from_hex(CARD_BG))
-                .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-                .clip_rounded(R_MD))
-            .child(info_rows)
+            Column(
+                Modifier::new()
+                    .fill_max_width()
+                    .padding(12.0)
+                    .margin_vertical(8.0)
+                    .background(Color::from_hex(CARD_BG))
+                    .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                    .clip_rounded(R_MD),
+            )
+            .child(info_rows),
         );
     }
 
@@ -422,7 +440,10 @@ fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
     let stage_label = s.active_stage.map(|st| format!("{:?}", st));
 
     let indicator = if let Some(stage) = &stage_label {
-        Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
+        Row(Modifier::new()
+            .fill_max_width()
+            .align_items(AlignItems::Center))
+        .child((
             Text(stage.as_str())
                 .size(FONT_XS)
                 .color(Color::from_hex(INDIGO))
@@ -471,7 +492,11 @@ fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
         .child((
             Text("●")
                 .size(8.0)
-                .color(Color::from_hex(if s.active_stage.is_some() { INDIGO } else { STATUS_DOT }))
+                .color(Color::from_hex(if s.active_stage.is_some() {
+                    INDIGO
+                } else {
+                    STATUS_DOT
+                }))
                 .modifier(Modifier::new().align_self_center().padding(4.0)),
             Text(last.to_string())
                 .size(FONT_SM)
@@ -533,7 +558,9 @@ fn home_view(store: Rc<Store>) -> View {
 
 pub fn root_view(store: Rc<Store>) -> View {
     let stack = remember_back_stack(Route::Home);
-    *store.navigator.borrow_mut() = Some(Navigator { stack: (*stack).clone() });
+    *store.navigator.borrow_mut() = Some(Navigator {
+        stack: (*stack).clone(),
+    });
 
     Surface(
         SurfaceConfig {

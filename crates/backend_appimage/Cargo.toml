@@ -7,3 +7,6 @@ edition.workspace = true
 domain = { path = "../domain" }
 ureq.workspace = true
 log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shlex.workspace = true

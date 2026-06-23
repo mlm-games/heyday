@@ -137,6 +137,7 @@ pub enum Action {
     ToggleFilterInstalled,
     SetSort(SortMode),
     ToggleLog,
+    PickFile,
 }
 
 pub struct Store {
@@ -348,6 +349,11 @@ impl Store {
                     }
                 }
                 Event::SystemChanged => {
+                    s.selected = None;
+                    s.detail = None;
+                    if let Some(ref nav) = *self.navigator.borrow() {
+                        nav.pop();
+                    }
                     self.refresh_current_view(&s);
                 }
             },
@@ -379,6 +385,21 @@ impl Store {
             Action::SetSort(m) => {
                 s.sort = m;
                 s.refilter();
+            }
+
+            Action::PickFile => {
+                let file = rfd::FileDialog::new()
+                    .add_filter(
+                        "Packages",
+                        &["AppImage", "pkg.tar.zst", "flatpakref", "flatpak"],
+                    )
+                    .pick_file();
+                if let Some(path) = file {
+                    self.send_job(
+                        JobKind::InstallFile,
+                        JobPayload::InstallFile(path.display().to_string()),
+                    );
+                }
             }
 
             Action::ToggleLog => s.log_expanded = !s.log_expanded,
