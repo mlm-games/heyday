@@ -349,9 +349,10 @@ impl Executor {
                                 match b.search(&q, &tx_local, &cancel) {
                                     Ok(mut v) => items.append(&mut v),
                                     Err(e) => {
-                                        let _ = tx_evt.send(Event::Error(
-                                            format!("{} search failed: {e}", b.name()),
-                                        ));
+                                        let _ = tx_evt.send(Event::Error(format!(
+                                            "{} search failed: {e}",
+                                            b.name()
+                                        )));
                                     }
                                 }
                             }
@@ -461,16 +462,24 @@ impl Executor {
                                     .and_then(|s| s.to_str())
                                     .unwrap_or("");
                                 let backend = match ext {
-                                    "AppImage" => selected.iter().find(|(name, _)| *name == "appimage").map(|(_, b)| &**b),
-                                    "zst" if path.ends_with(".pkg.tar.zst") => {
-                                        selected.iter().find(|(name, _)| *name == "alpm").map(|(_, b)| &**b)
-                                    }
+                                    "AppImage" => selected
+                                        .iter()
+                                        .find(|(name, _)| *name == "appimage")
+                                        .map(|(_, b)| &**b),
+                                    "zst" if path.ends_with(".pkg.tar.zst") => selected
+                                        .iter()
+                                        .find(|(name, _)| *name == "alpm")
+                                        .map(|(_, b)| &**b),
                                     _ => None,
                                 };
                                 if let Some(b) = backend {
                                     b.install_file(path, &tx_local, &cancel)
                                 } else {
-                                    send_direct(Stage::Failed, Some(format!("no backend for file: {path}")), true);
+                                    send_direct(
+                                        Stage::Failed,
+                                        Some(format!("no backend for file: {path}")),
+                                        true,
+                                    );
                                     Err(Error::Internal(format!("no backend for file: {path}")))
                                 }
                             } else {

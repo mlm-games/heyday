@@ -86,10 +86,7 @@ impl FlatpakBackend {
         })
     }
 
-    fn with_each_installation(
-        &self,
-        f: &mut dyn FnMut(&Installation),
-    ) {
+    fn with_each_installation(&self, f: &mut dyn FnMut(&Installation)) {
         for u in &self.user_modes {
             if let Some(inst) = Self::open_installation(*u) {
                 f(&inst);
@@ -99,8 +96,12 @@ impl FlatpakBackend {
 
     fn find_installed_ref(&self, name: &str) -> Option<(String, bool)> {
         for u in &self.user_modes {
-            let Some(inst) = Self::open_installation(*u) else { continue };
-            let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) else { continue };
+            let Some(inst) = Self::open_installation(*u) else {
+                continue;
+            };
+            let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) else {
+                continue;
+            };
             for r in &refs {
                 if r.name().as_deref() == Some(name) {
                     if let Some(ref_str) = r.format_ref().map(|s| s.to_string()) {
@@ -240,8 +241,12 @@ impl PackageBackend for FlatpakBackend {
 
     fn refresh(&self, sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         for u in &self.user_modes {
-            let Some(inst) = Self::open_installation(*u) else { continue };
-            let Ok(remotes) = inst.list_remotes(Cancellable::NONE) else { continue };
+            let Some(inst) = Self::open_installation(*u) else {
+                continue;
+            };
+            let Ok(remotes) = inst.list_remotes(Cancellable::NONE) else {
+                continue;
+            };
             for remote in &remotes {
                 if let Some(name) = remote.name() {
                     let _ = sink.send(Progress {
@@ -330,7 +335,9 @@ impl PackageBackend for FlatpakBackend {
         let mut size_install = None;
         let mut is_installed = false;
         'outer: for u in &self.user_modes {
-            let Some(inst) = Self::open_installation(*u) else { continue };
+            let Some(inst) = Self::open_installation(*u) else {
+                continue;
+            };
             let _ = inst.drop_caches(Cancellable::NONE);
             if let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) {
                 for r in &refs {
@@ -382,9 +389,13 @@ impl PackageBackend for FlatpakBackend {
         let cache = self.app_cache.lock().unwrap();
         let mut results = Vec::new();
         for u in &self.user_modes {
-            let Some(inst) = Self::open_installation(*u) else { continue };
+            let Some(inst) = Self::open_installation(*u) else {
+                continue;
+            };
             let _ = inst.drop_caches(Cancellable::NONE);
-            let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) else { continue };
+            let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) else {
+                continue;
+            };
             for r in &refs {
                 if let Some(s) = Self::summary_from_ref(r, &*cache) {
                     results.push(s);
@@ -398,9 +409,13 @@ impl PackageBackend for FlatpakBackend {
         let cache = self.app_cache.lock().unwrap();
         let mut results = Vec::new();
         for u in &self.user_modes {
-            let Some(inst) = Self::open_installation(*u) else { continue };
+            let Some(inst) = Self::open_installation(*u) else {
+                continue;
+            };
             let _ = inst.drop_caches(Cancellable::NONE);
-            let Ok(refs) = inst.list_installed_refs_for_update(Cancellable::NONE) else { continue };
+            let Ok(refs) = inst.list_installed_refs_for_update(Cancellable::NONE) else {
+                continue;
+            };
             for r in &refs {
                 if let Some(s) = Self::summary_from_ref(r, &*cache) {
                     results.push(s);
@@ -496,9 +511,13 @@ impl PackageBackend for FlatpakBackend {
         }
         let mut refs: Vec<(String, bool)> = Vec::new();
         for u in &self.user_modes {
-            let Some(inst) = Self::open_installation(*u) else { continue };
+            let Some(inst) = Self::open_installation(*u) else {
+                continue;
+            };
             let _ = inst.drop_caches(Cancellable::NONE);
-            let Ok(urefs) = inst.list_installed_refs_for_update(Cancellable::NONE) else { continue };
+            let Ok(urefs) = inst.list_installed_refs_for_update(Cancellable::NONE) else {
+                continue;
+            };
             for r in &urefs {
                 if let Some(ref_str) = r.format_ref().map(|s| s.to_string()) {
                     refs.push((ref_str, *u));
@@ -510,7 +529,8 @@ impl PackageBackend for FlatpakBackend {
         }
         // Group by installation type
         for u in &self.user_modes {
-            let batch: Vec<&str> = refs.iter()
+            let batch: Vec<&str> = refs
+                .iter()
                 .filter(|(_, mode)| mode == u)
                 .map(|(r, _)| r.as_str())
                 .collect();

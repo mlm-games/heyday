@@ -222,15 +222,24 @@ impl PackageBackend for AlpmBackend {
             .as_ref()
             .map(|r| format!("{r}/{}", id.name))
             .unwrap_or_else(|| id.name.clone());
-        pkexec_pacman(&["-S", "--noconfirm", "--needed", &pkg], sink, cancel, Stage::Installing)
+        pkexec_pacman(
+            &["-S", "--noconfirm", "--needed", &pkg],
+            sink,
+            cancel,
+            Stage::Installing,
+        )
     }
 
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         match pkexec_pacman(&["-Sy", "--noconfirm"], sink, cancel, Stage::Refreshing) {
             Ok(()) => Ok(()),
             Err(Error::Internal(e)) if e.contains("spawn:") => {
-                send_log(sink, Stage::Refreshing,
-                    "pkexec unavailable; trying unprivileged refresh", true);
+                send_log(
+                    sink,
+                    Stage::Refreshing,
+                    "pkexec unavailable; trying unprivileged refresh",
+                    true,
+                );
                 let mut cmd = Command::new("pacman");
                 cmd.args(["-Sy", "--noconfirm"]);
                 let (code, last_err) = run_stream(cmd, sink, cancel, Stage::Refreshing)?;
@@ -253,7 +262,12 @@ impl PackageBackend for AlpmBackend {
     ) -> Result<Vec<PackageSummary>> {
         let q = q.trim().to_lowercase();
         if q.len() < 2 {
-            send_log(sink, Stage::Searching, "repo: query too short (<2), ignoring", true);
+            send_log(
+                sink,
+                Stage::Searching,
+                "repo: query too short (<2), ignoring",
+                true,
+            );
             return Ok(vec![]);
         }
         send_log(sink, Stage::Searching, &format!("repo search: {q}"), false);
@@ -291,7 +305,12 @@ impl PackageBackend for AlpmBackend {
             }
         }
 
-        send_log(sink, Stage::Searching, &format!("repo: {} matches", results.len()), false);
+        send_log(
+            sink,
+            Stage::Searching,
+            &format!("repo: {} matches", results.len()),
+            false,
+        );
         Ok(results)
     }
 
@@ -352,7 +371,12 @@ impl PackageBackend for AlpmBackend {
             }
         }
 
-        send_log(sink, Stage::Searching, &format!("repo: package not found: {}", id.name), true);
+        send_log(
+            sink,
+            Stage::Searching,
+            &format!("repo: package not found: {}", id.name),
+            true,
+        );
         Err(Error::Alpm("not found".into()))
     }
 
@@ -415,7 +439,12 @@ impl PackageBackend for AlpmBackend {
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        pkexec_pacman(&["-Rns", "--noconfirm", &id.name], sink, cancel, Stage::Removing)
+        pkexec_pacman(
+            &["-Rns", "--noconfirm", &id.name],
+            sink,
+            cancel,
+            Stage::Removing,
+        )
     }
 
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -424,20 +453,25 @@ impl PackageBackend for AlpmBackend {
             .as_ref()
             .map(|r| format!("{r}/{}", id.name))
             .unwrap_or_else(|| id.name.clone());
-        pkexec_pacman(&["-S", "--noconfirm", &pkg], sink, cancel, Stage::Installing)
+        pkexec_pacman(
+            &["-S", "--noconfirm", &pkg],
+            sink,
+            cancel,
+            Stage::Installing,
+        )
     }
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         pkexec_pacman(&["-Syu", "--noconfirm"], sink, cancel, Stage::Installing)
     }
 
-    fn install_file(
-        &self,
-        path: &str,
-        sink: &ProgressSink,
-        cancel: &CancelToken,
-    ) -> Result<()> {
-        pkexec_pacman(&["-U", "--noconfirm", path], sink, cancel, Stage::Installing)
+    fn install_file(&self, path: &str, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        pkexec_pacman(
+            &["-U", "--noconfirm", path],
+            sink,
+            cancel,
+            Stage::Installing,
+        )
     }
 
     fn operation(

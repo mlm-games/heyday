@@ -1,6 +1,6 @@
 use flate2::read::GzDecoder;
-use quick_xml::events::Event;
 use quick_xml::Reader as XmlReader;
+use quick_xml::events::Event;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 

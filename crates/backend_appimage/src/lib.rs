@@ -738,7 +738,11 @@ impl PackageBackend for AppImageBackend {
                 developer: meta.as_ref().and_then(|m| m.developer.clone()),
                 homepage: meta.as_ref().and_then(|m| m.homepage.clone()),
                 long_description: meta.as_ref().and_then(|m| {
-                    if m.description.is_empty() { None } else { Some(m.description.clone()) }
+                    if m.description.is_empty() {
+                        None
+                    } else {
+                        Some(m.description.clone())
+                    }
                 }),
             },
         );
@@ -813,7 +817,11 @@ impl PackageBackend for AppImageBackend {
                 developer: meta.as_ref().and_then(|m| m.developer.clone()),
                 homepage: meta.as_ref().and_then(|m| m.homepage.clone()),
                 long_description: meta.as_ref().and_then(|m| {
-                    if m.description.is_empty() { None } else { Some(m.description.clone()) }
+                    if m.description.is_empty() {
+                        None
+                    } else {
+                        Some(m.description.clone())
+                    }
                 }),
             },
         );

@@ -380,11 +380,26 @@ impl Store {
                 }
             }
 
-            Action::ToggleFilterRepo => { s.filter_repo = !s.filter_repo; s.refilter(); }
-            Action::ToggleFilterAur => { s.filter_aur = !s.filter_aur; s.refilter(); }
-            Action::ToggleFilterFlatpak => { s.filter_flatpak = !s.filter_flatpak; s.refilter(); }
-            Action::ToggleFilterAppImage => { s.filter_appimage = !s.filter_appimage; s.refilter(); }
-            Action::ToggleFilterInstalled => { s.filter_installed = !s.filter_installed; s.refilter(); }
+            Action::ToggleFilterRepo => {
+                s.filter_repo = !s.filter_repo;
+                s.refilter();
+            }
+            Action::ToggleFilterAur => {
+                s.filter_aur = !s.filter_aur;
+                s.refilter();
+            }
+            Action::ToggleFilterFlatpak => {
+                s.filter_flatpak = !s.filter_flatpak;
+                s.refilter();
+            }
+            Action::ToggleFilterAppImage => {
+                s.filter_appimage = !s.filter_appimage;
+                s.refilter();
+            }
+            Action::ToggleFilterInstalled => {
+                s.filter_installed = !s.filter_installed;
+                s.refilter();
+            }
             Action::SetSort(m) => {
                 s.sort = m;
                 s.refilter();
