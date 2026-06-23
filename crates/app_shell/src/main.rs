@@ -1,4 +1,5 @@
 use crossbeam_channel as chan;
+use log::error;
 use repose_core::Modifier;
 use std::{rc::Rc, sync::Arc};
 
@@ -12,14 +13,14 @@ use repose_ui::overlay::{OverlayHandle, SnackbarController};
 
 #[cfg(feature = "backend-alpm")]
 use backend_alpm::AlpmBackend;
-#[cfg(feature = "backend-packagekit")]
-use backend_packagekit::PackageKitBackend;
+#[cfg(feature = "backend-appimage")]
+use backend_appimage::AppImageBackend;
 #[cfg(feature = "backend-aur")]
 use backend_aur::AurBackend;
 #[cfg(feature = "backend-flatpak")]
 use backend_flatpak::FlatpakBackend;
-#[cfg(feature = "backend-appimage")]
-use backend_appimage::AppImageBackend;
+#[cfg(feature = "backend-packagekit")]
+use backend_packagekit::PackageKitBackend;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -53,9 +54,12 @@ fn main() -> anyhow::Result<()> {
     }
 
     #[cfg(feature = "backend-flatpak")]
-    {
-        let flatpak: Arc<dyn PackageBackend> = Arc::new(FlatpakBackend::new(true));
-        backends.push((flatpak.name(), flatpak));
+    match FlatpakBackend::new(true) {
+        Ok(fp) => {
+            let flatpak: Arc<dyn PackageBackend> = Arc::new(fp);
+            backends.push((flatpak.name(), flatpak));
+        }
+        Err(e) => error!("Flatpak backend unavailable: {e}"),
     }
 
     #[cfg(feature = "backend-appimage")]
@@ -70,6 +74,7 @@ fn main() -> anyhow::Result<()> {
     let snackbar = SnackbarController::new(overlay.clone());
 
     let store = Rc::new(Store::new(tx_jobs, Some(snackbar)));
+    // store.dispatch(Action::Refresh);  HACK: enable it once you figure out how octopi can update repos without polkit (is done via local repo updation, but a better soln might also be possible?)
 
     run_desktop_app(move |_sched, _ctx| {
         while let Ok(p) = rx_prog.try_recv() {

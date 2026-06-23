@@ -90,6 +90,7 @@ pub enum Event {
         items: Vec<PackageSummary>,
     },
     SystemChanged,
+    Error(String),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -348,11 +349,9 @@ impl Executor {
                                 match b.search(&q, &tx_local, &cancel) {
                                     Ok(mut v) => items.append(&mut v),
                                     Err(e) => {
-                                        send_direct(
-                                            Stage::Searching,
-                                            Some(format!("{} search failed: {e}", b.name())),
-                                            true,
-                                        );
+                                        let _ = tx_evt.send(Event::Error(
+                                            format!("{} search failed: {e}", b.name()),
+                                        ));
                                     }
                                 }
                             }

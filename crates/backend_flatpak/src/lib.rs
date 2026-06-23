@@ -1,30 +1,11 @@
 use domain::*;
-use libflatpak::{
-    gio::Cancellable,
-    glib, prelude::*,
-    Installation, Transaction,
-};
-use std::{
-    cell::Cell,
-    collections::HashMap,
-    fs,
-    rc::Rc,
-};
+use libflatpak::{Installation, Transaction, gio::Cancellable, glib, prelude::*};
+use std::{cell::Cell, collections::HashMap, fs, rc::Rc, sync::Mutex};
 
 use domain::appstream::AppstreamMeta;
 
 /// Find and parse all appstream XML files for a flatpak installation.
-fn load_appstream_cache(user: bool) -> HashMap<String, AppstreamMeta> {
-    let inst = if user {
-        Installation::new_user(Cancellable::NONE)
-    } else {
-        Installation::new_system(Cancellable::NONE)
-    };
-    let inst = match inst {
-        Ok(i) => i,
-        Err(_) => return HashMap::new(),
-    };
-
+fn load_appstream_cache(inst: &Installation) -> HashMap<String, AppstreamMeta> {
     let remotes = match inst.list_remotes(Cancellable::NONE) {
         Ok(r) => r,
         Err(_) => return HashMap::new(),
@@ -63,17 +44,49 @@ fn load_appstream_cache(user: bool) -> HashMap<String, AppstreamMeta> {
 
 pub struct FlatpakBackend {
     user: bool,
-    app_cache: HashMap<String, AppstreamMeta>,
+    app_cache: Mutex<HashMap<String, AppstreamMeta>>,
 }
 
 impl FlatpakBackend {
-    pub fn new(user: bool) -> Self {
-        glib::set_application_name("soredowe");
-        let cache = load_appstream_cache(user);
-        Self {
-            user,
-            app_cache: cache,
+    /// Return (installation, is_user, has_remotes)
+    fn try_installation(user: bool) -> (Option<Installation>, bool, bool) {
+        let inst = if user {
+            Installation::new_user(Cancellable::NONE)
+        } else {
+            Installation::new_system(Cancellable::NONE)
+        };
+        match inst {
+            Ok(i) => {
+                let has = i
+                    .list_remotes(Cancellable::NONE)
+                    .map(|r| !r.is_empty())
+                    .unwrap_or(false);
+                (Some(i), user, has)
+            }
+            Err(_) => (None, user, false),
         }
+    }
+
+    pub fn new(user_request: bool) -> Result<Self> {
+        glib::set_application_name("soredowe");
+
+        let first = Self::try_installation(user_request);
+        let second = Self::try_installation(!user_request);
+
+        // Prefer whichever has remotes; fall back to whichever works
+        let (inst, working_user) = match (first, second) {
+            ((Some(i), _, true), _) => (i, user_request),
+            (_, (Some(i), _, true)) => (i, !user_request),
+            ((Some(i), u, false), _) => (i, u),
+            (_, (Some(i), u, false)) => (i, u),
+            _ => return Err(Error::Flatpak("no flatpak installation found".into())),
+        };
+
+        let cache = load_appstream_cache(&inst);
+        Ok(Self {
+            user: working_user,
+            app_cache: Mutex::new(cache),
+        })
     }
 
     fn installation(&self) -> std::result::Result<Installation, Error> {
@@ -97,7 +110,10 @@ impl FlatpakBackend {
         None
     }
 
-    fn summary_from_ref<R>(r: &R, app_cache: &HashMap<String, AppstreamMeta>) -> Option<PackageSummary>
+    fn summary_from_ref<R>(
+        r: &R,
+        app_cache: &HashMap<String, AppstreamMeta>,
+    ) -> Option<PackageSummary>
     where
         R: RefExt + InstalledRefExt,
     {
@@ -107,10 +123,7 @@ impl FlatpakBackend {
         let app_info = app_cache.get(&name);
         let description = app_info
             .map(|a| a.summary.clone())
-            .or_else(|| {
-                r.appdata_name()
-                    .map(|s| s.to_string())
-            })
+            .or_else(|| r.appdata_name().map(|s| s.to_string()))
             .unwrap_or_default();
         Some(PackageSummary {
             id: PackageId {
@@ -207,18 +220,26 @@ impl PackageBackend for FlatpakBackend {
         "flatpak"
     }
 
-    fn refresh(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
+    fn refresh(&self, sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         let inst = self.installation()?;
         let remotes: Vec<libflatpak::Remote> = inst
             .list_remotes(Cancellable::NONE)
             .map_err(|e| Error::Flatpak(e.to_string()))?;
         for remote in &remotes {
             if let Some(name) = remote.name() {
-                log::info!("updating flatpak remote {name}");
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Searching,
+                    percent: None,
+                    bytes: None,
+                    log: Some(format!("updating flatpak remote: {name}")),
+                    warning: false,
+                });
                 let _ = inst.update_remote_sync(&name, Cancellable::NONE);
                 let _ = inst.update_appstream_sync(&name, None, Cancellable::NONE);
             }
         }
+        *self.app_cache.lock().unwrap() = load_appstream_cache(&inst);
         Ok(())
     }
 
@@ -240,8 +261,9 @@ impl PackageBackend for FlatpakBackend {
             .map(|p| p.id.name)
             .collect();
 
+        let cache = self.app_cache.lock().unwrap();
         let mut results: Vec<PackageSummary> = Vec::new();
-        for (app_id, info) in &self.app_cache {
+        for (app_id, info) in cache.iter() {
             let id_lower = app_id.to_lowercase();
             let name_lower = info.name.to_lowercase();
             let summary_lower = info.summary.to_lowercase();
@@ -271,45 +293,47 @@ impl PackageBackend for FlatpakBackend {
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<PackageDetails> {
-        let info = self.app_cache.get(&id.name);
+        let cache = self.app_cache.lock().unwrap();
+        let info = cache.get(&id.name);
 
-    let mut version = String::new();
-    let mut size_install = None;
-    let mut is_installed = false;
-    if let Ok(inst) = self.installation() {
-        if let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) {
-            for r in &refs {
-                if r.name().as_deref() == Some(&id.name) {
-                    is_installed = true;
-                    version = r.appdata_version().unwrap_or_default().to_string();
-                    let install_size = r.installed_size();
-                    if install_size > 0 {
-                        size_install = Some(install_size);
+        let mut version = String::new();
+        let mut size_install = None;
+        let mut is_installed = false;
+        if let Ok(inst) = self.installation() {
+            if let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) {
+                for r in &refs {
+                    if r.name().as_deref() == Some(&id.name) {
+                        is_installed = true;
+                        version = r.appdata_version().unwrap_or_default().to_string();
+                        let install_size = r.installed_size();
+                        if install_size > 0 {
+                            size_install = Some(install_size);
+                        }
+                        break;
                     }
-                    break;
                 }
             }
         }
-    }
-    if version.is_empty() {
-        version = info.and_then(|i| i.version.clone()).unwrap_or_default();
-    }
+        if version.is_empty() {
+            version = info.and_then(|i| i.version.clone()).unwrap_or_default();
+        }
 
-    Ok(PackageDetails {
-        summary: PackageSummary {
-            id: id.clone(),
-            version,
-            description: info
-                .as_ref()
-                .map(|i| i.summary.clone())
-                .unwrap_or_default(),
-            installed: is_installed,
-            popular: None,
-            last_updated: None,
-        },
+        Ok(PackageDetails {
+            summary: PackageSummary {
+                id: id.clone(),
+                version,
+                description: info.as_ref().map(|i| i.summary.clone()).unwrap_or_default(),
+                installed: is_installed,
+                popular: None,
+                last_updated: None,
+            },
             description: info.as_ref().and_then(|i| {
                 let d = i.description.trim();
-                if d.is_empty() { None } else { Some(d.to_string()) }
+                if d.is_empty() {
+                    None
+                } else {
+                    Some(d.to_string())
+                }
             }),
             depends: vec![],
             opt_depends: vec![],
@@ -327,9 +351,10 @@ impl PackageBackend for FlatpakBackend {
         let refs: Vec<libflatpak::InstalledRef> = inst
             .list_installed_refs(Cancellable::NONE)
             .map_err(|e| Error::Flatpak(e.to_string()))?;
+        let cache = self.app_cache.lock().unwrap();
         let mut results = Vec::new();
         for r in &refs {
-            if let Some(s) = Self::summary_from_ref(r, &self.app_cache) {
+            if let Some(s) = Self::summary_from_ref(r, &*cache) {
                 results.push(s);
             }
         }
@@ -341,9 +366,10 @@ impl PackageBackend for FlatpakBackend {
         let refs: Vec<libflatpak::InstalledRef> = inst
             .list_installed_refs_for_update(Cancellable::NONE)
             .map_err(|e| Error::Flatpak(e.to_string()))?;
+        let cache = self.app_cache.lock().unwrap();
         let mut results = Vec::new();
         for r in &refs {
-            if let Some(s) = Self::summary_from_ref(r, &self.app_cache) {
+            if let Some(s) = Self::summary_from_ref(r, &*cache) {
                 results.push(s);
             }
         }

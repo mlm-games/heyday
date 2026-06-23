@@ -356,6 +356,9 @@ impl Store {
                     }
                     self.refresh_current_view(&s);
                 }
+                Event::Error(msg) => {
+                    self.show_snackbar(msg);
+                }
             },
 
             Action::Select(id) => {
