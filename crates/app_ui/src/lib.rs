@@ -1,4 +1,4 @@
-use crate::state::{Action, AppState, SortMode, Store};
+use crate::state::{Action, AppState, Route, SortMode, Store};
 use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
@@ -6,6 +6,7 @@ use repose_core::*;
 use repose_material::material3::{
     LinearProgressIndicator, LinearProgressIndicatorConfig, Surface, SurfaceConfig,
 };
+use repose_navigation::{NavDisplay, Navigator, NavTransition, EntryScope, renderer, remember_back_stack};
 use repose_ui::{
     lazy::{LazyColumn, LazyColumnState},
     scroll::{ScrollArea, remember_scroll_state},
@@ -17,8 +18,9 @@ pub mod state;
 pub mod theme;
 pub mod widgets;
 
-const PANE_HEIGHT_DP: f32 = 520.0;
 const LOG_HEIGHT_DP: f32 = 180.0;
+const AVATAR_SIZE: f32 = 36.0;
+const AVATAR_SIZE_LG: f32 = 64.0;
 
 fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
     let title = if s.in_upgrades_view {
@@ -159,12 +161,10 @@ fn pkg_action(store: &Rc<Store>, pkg: &PackageSummary, upgrades_mode: bool) -> V
     }
 }
 
-fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode: bool) -> View {
+fn pkg_row(store: Rc<Store>, pkg: PackageSummary, _selected: bool, upgrades_mode: bool) -> View {
     let is_aur = pkg.id.source == Source::Aur;
 
-    let (bg, border) = if selected {
-        (SEL_BG, SEL_BORDER)
-    } else if is_aur {
+    let (bg, border) = if is_aur {
         (AUR_BG, AUR_BORDER)
     } else {
         (CARD_BG, CARD_BORDER)
@@ -184,6 +184,8 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
             move |_| store.dispatch(Action::Select(id.clone()))
         }))
     .child((
+        pkg_avatar(&pkg.id.name, AVATAR_SIZE),
+        Space(Modifier::new().width(12.0)),
         Column(Modifier::new().flex_grow(1.0)).child((
         Row(Modifier::new().align_items(AlignItems::Center)).child((
             Text(pkg.id.name.clone())
@@ -248,7 +250,7 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
         remember_with_key("pkg_scroll", LazyColumnState::new),
         Modifier::new()
             .fill_max_width()
-            .height(PANE_HEIGHT_DP)
+            .flex_grow(1.0)
             .clip_rounded(R_SM)
             .padding(4.0),
         |pkg: &PackageSummary| {
@@ -276,21 +278,6 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
         None => return Box(Modifier::new()),
     };
 
-    let actions = Row(Modifier::new().padding_values(PaddingValues {
-        left: 0.0,
-        right: 0.0,
-        top: 12.0,
-        bottom: 4.0,
-    }))
-    .child((
-        pkg_action(&store, &summary, s.in_upgrades_view),
-        Space(Modifier::new().width(8.0)),
-        secondary_button("Back", {
-            let store = store.clone();
-            move || store.dispatch(Action::ClearSelection)
-        }),
-    ));
-
     let detail_section: View = if let Some(det) = &s.detail {
         details_body(det)
     } else {
@@ -306,42 +293,49 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
     ));
 
     ScrollArea(
-        Modifier::new().fill_max_size().then(card_mod()),
+        Modifier::new().fill_max_size().padding(24.0),
         scroll,
-        Column(Modifier::new().fill_max_size().padding(20.0)).child((
+        Column(Modifier::new().fill_max_size().max_width(780.0).align_self_center()).child((
             Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
-                Text(summary.id.name.clone())
-                    .size(FONT_2XL)
-                    .color(Color::from_hex(TEXT_PRIMARY)),
-                Spacer(),
                 secondary_button("Back", {
                     let store = store.clone();
                     move || store.dispatch(Action::ClearSelection)
                 }),
+                Spacer(),
+                pkg_action(&store, &summary, s.in_upgrades_view),
             )),
-            Space(Modifier::new().height(6.0)),
-            Row(Modifier::new().align_items(AlignItems::Center)).child((
-                Text(format!("v{}", summary.version))
-                    .size(FONT_SM)
-                    .color(Color::from_hex(TEXT_DIMMED)),
-                Space(Modifier::new().width(8.0)),
-                source_badge(&summary),
-                if summary.installed {
-                    installed_badge()
-                } else {
-                    Box(Modifier::new())
-                },
+            Space(Modifier::new().height(20.0)),
+            Row(Modifier::new().fill_max_width()).child((
+                pkg_avatar(&summary.id.name, AVATAR_SIZE_LG),
+                Space(Modifier::new().width(20.0)),
+                Column(Modifier::new().flex_grow(1.0)).child((
+                    Row(Modifier::new().align_items(AlignItems::Center)).child((
+                        Text(summary.id.name.clone())
+                            .size(28.0)
+                            .color(Color::from_hex(TEXT_PRIMARY)),
+                        Space(Modifier::new().width(12.0)),
+                        source_badge(&summary),
+                        if summary.installed {
+                            installed_badge()
+                        } else {
+                            Box(Modifier::new())
+                        },
+                    )),
+                    Space(Modifier::new().height(6.0)),
+                    Text(summary.description.clone())
+                        .size(FONT_BASE)
+                        .color(Color::from_hex(TEXT_SECONDARY))
+                        .max_lines(6)
+                        .overflow_ellipsize(),
+                    Space(Modifier::new().height(4.0)),
+                    Text(format!("v{}", summary.version))
+                        .size(FONT_SM)
+                        .color(Color::from_hex(TEXT_DIMMED)),
+                )),
             )),
-            Space(Modifier::new().height(12.0)),
-            Text(summary.description.clone())
-                .size(FONT_BASE)
-                .color(Color::from_hex(TEXT_SECONDARY))
-                .max_lines(6)
-                .overflow_ellipsize(),
-            Space(Modifier::new().height(8.0)),
+            Space(Modifier::new().height(16.0)),
             divider(),
-            actions,
-            Space(Modifier::new().height(8.0)),
+            Space(Modifier::new().height(12.0)),
             detail_section,
         )),
     )
@@ -370,29 +364,45 @@ fn details_body(det: &PackageDetails) -> View {
 
 fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
     let last = s.progress_log.lines().last().unwrap_or("Ready");
+    let stage_label = s.active_stage.map(|st| format!("{:?}", st));
 
-    let indicator = if s.active_stage.is_some() {
-        if let Some(pct) = s.progress_pct {
-            LinearProgressIndicator(
-                Some(pct),
-                LinearProgressIndicatorConfig {
-                    color: Color::from_hex(BLUE_BORDER),
-                    track_color: Color::from_hex(CARD_BORDER),
-                    ..Default::default()
-                },
-            )
-        } else {
-            LinearProgressIndicator(
-                None,
-                LinearProgressIndicatorConfig {
-                    color: Color::from_hex(INDIGO),
-                    track_color: Color::from_hex(CARD_BORDER),
-                    ..Default::default()
-                },
-            )
-        }
+    let indicator = if let Some(stage) = &stage_label {
+        Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
+            Text(stage.as_str())
+                .size(FONT_XS)
+                .color(Color::from_hex(INDIGO))
+                .modifier(Modifier::new().padding(4.0).width(100.0)),
+            if let Some(pct) = s.progress_pct {
+                LinearProgressIndicator(
+                    Some(pct),
+                    LinearProgressIndicatorConfig {
+                        color: Color::from_hex(BLUE_BORDER),
+                        track_color: Color::from_hex(CARD_BORDER),
+                        ..Default::default()
+                    },
+                )
+            } else {
+                LinearProgressIndicator(
+                    None,
+                    LinearProgressIndicatorConfig {
+                        color: Color::from_hex(INDIGO),
+                        track_color: Color::from_hex(CARD_BORDER),
+                        ..Default::default()
+                    },
+                )
+            },
+            Space(Modifier::new().width(4.0)),
+            if let Some(pct) = s.progress_pct {
+                Text(format!("{:.0}%", pct * 100.0))
+                    .size(FONT_XS)
+                    .color(Color::from_hex(TEXT_DIMMED))
+                    .modifier(Modifier::new().width(40.0))
+            } else {
+                Box(Modifier::new().width(40.0))
+            },
+        ))
     } else {
-        Box(Modifier::new())
+        Box(Modifier::new().height(6.0))
     };
 
     Column(Modifier::new().fill_max_width().margin_vertical(4.0)).child((
@@ -406,7 +416,7 @@ fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
         .child((
             Text("●")
                 .size(8.0)
-                .color(Color::from_hex(STATUS_DOT))
+                .color(Color::from_hex(if s.active_stage.is_some() { INDIGO } else { STATUS_DOT }))
                 .modifier(Modifier::new().align_self_center().padding(4.0)),
             Text(last.to_string())
                 .size(FONT_SM)
@@ -453,8 +463,22 @@ fn log_panel(s: &AppState) -> View {
     )
 }
 
-pub fn root_view(store: Rc<Store>) -> View {
+fn home_view(store: Rc<Store>) -> View {
     let s = store.state.get();
+    Column(Modifier::new().fill_max_size().padding(16.0)).child((
+        top_bar(&store, &s),
+        divider(),
+        search_section(&store, &s),
+        Space(Modifier::new().height(8.0)),
+        results_list(&store, &s),
+        status_bar(&store, &s),
+        log_panel(&s),
+    ))
+}
+
+pub fn root_view(store: Rc<Store>) -> View {
+    let stack = remember_back_stack(Route::Home);
+    *store.navigator.borrow_mut() = Some(Navigator { stack: (*stack).clone() });
 
     Surface(
         SurfaceConfig {
@@ -464,24 +488,18 @@ pub fn root_view(store: Rc<Store>) -> View {
             ..Default::default()
         },
         || {
-            Column(Modifier::new().fill_max_size().padding(16.0)).child((
-                top_bar(&store, &s),
-                divider(),
-                search_section(&store, &s),
-                Space(Modifier::new().height(8.0)),
-                Row(Modifier::new()
-                    .fill_max_width()
-                    .flex_grow(1.0)
-                    .flex_basis(0.0))
-                .child((
-                    Box(Modifier::new().weight(7.0).padding(4.0)).child(results_list(&store, &s)),
-                    Space(Modifier::new().width(8.0)),
-                    Box(Modifier::new().weight(3.0).padding(4.0))
-                        .child(details_pane(store.clone(), &s)),
-                )),
-                status_bar(&store, &s),
-                log_panel(&s),
-            ))
+            NavDisplay(
+                stack.clone(),
+                renderer(move |scope: &EntryScope<Route>| match scope.key() {
+                    Route::Home => home_view(store.clone()),
+                    Route::Detail(_) => {
+                        let s = store.state.get();
+                        detail_overlay(store.clone(), &s)
+                    }
+                }),
+                None,
+                NavTransition::default(),
+            )
         },
     )
 }

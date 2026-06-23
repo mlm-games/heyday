@@ -182,6 +182,13 @@ impl PackageBackend for FlatpakBackend {
             return Ok(vec![]);
         }
 
+        let installed: std::collections::HashSet<String> = self
+            .installed(_cancel)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.id.name)
+            .collect();
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut results = Vec::new();
 
@@ -214,7 +221,7 @@ impl PackageBackend for FlatpakBackend {
                 },
                 version: version.to_string(),
                 description: description.to_string(),
-                installed: false,
+                installed: installed.contains(name),
                 popular: None,
                 last_updated: None,
             });

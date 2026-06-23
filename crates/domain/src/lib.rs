@@ -1,5 +1,6 @@
 use crossbeam_channel as chan;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     sync::{
@@ -9,7 +10,7 @@ use std::{
     time::SystemTime,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Source {
     Repo,
     Aur,
@@ -17,7 +18,7 @@ pub enum Source {
     AppImage,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackageId {
     pub name: String,
     pub source: Source,

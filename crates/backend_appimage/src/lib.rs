@@ -43,11 +43,16 @@ impl PackageBackend for AppImageBackend {
 
     fn search(
         &self,
-        _q: &str,
+        q: &str,
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<Vec<PackageSummary>> {
-        Ok(vec![])
+        let q = q.to_lowercase();
+        Ok(self
+            .installed(_cancel)?
+            .into_iter()
+            .filter(|p| p.id.name.to_lowercase().contains(&q))
+            .collect())
     }
 
     fn details(

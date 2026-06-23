@@ -229,6 +229,35 @@ pub fn tag_list(label: &str, items: &[String]) -> View {
     ))
 }
 
+pub fn pkg_avatar(name: &str, size: f32) -> View {
+    let (fg, bg) = {
+        let rgb = ColorHash::new().lightness(0.18).saturation(0.55).rgb(name);
+        let bg = BigColor::from_rgb(rgb.red() as u8, rgb.green() as u8, rgb.blue() as u8, 1.0);
+        let fg = bg.get_contrast_color(1.0);
+        (fg.to_hex_string(false), bg.to_hex_string(false))
+    };
+    let letter = name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().next().unwrap_or(c))
+        .unwrap_or('?');
+
+    Column(
+        Modifier::new()
+            .width(size)
+            .height(size)
+            .background(Color::from_hex(&bg))
+            .clip_rounded(size / 2.0)
+            .justify_content(JustifyContent::Center)
+            .align_items(AlignItems::Center),
+    )
+    .child(
+        Text(letter.to_string())
+            .size(size * 0.48)
+            .color(Color::from_hex(&fg)),
+    )
+}
+
 pub fn format_bytes(b: u64) -> String {
     if b >= 1024 * 1024 {
         format!("{:.1} MiB", b as f64 / (1024.0 * 1024.0))

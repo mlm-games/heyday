@@ -4,9 +4,18 @@ use repose_core::locals::with_theme;
 use repose_core::signal::signal;
 use repose_core::*;
 use repose_material::material3;
+use repose_navigation::Navigator;
 use repose_ui::overlay::{SnackbarController, SnackbarRequest};
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Route {
+    Home,
+    Detail(PackageId),
+}
 
 const MAX_LOG: usize = 256 * 1024;
 
@@ -120,6 +129,7 @@ pub struct Store {
     tx_jobs: chan::Sender<domain::Job>,
     next_id: AtomicU64,
     pub snackbar: Option<SnackbarController>,
+    pub navigator: RefCell<Option<Navigator<Route>>>,
 }
 
 impl Store {
@@ -133,6 +143,7 @@ impl Store {
             tx_jobs,
             next_id: std::sync::atomic::AtomicU64::new(1),
             snackbar,
+            navigator: RefCell::new(None),
         }
     }
 
@@ -324,8 +335,11 @@ impl Store {
 
             Action::Select(id) => {
                 if s.selected.as_ref() != Some(&id) {
-                    s.detail = None; // clear stale detail
+                    s.detail = None;
                     self.send_details(&id);
+                }
+                if let Some(ref nav) = *self.navigator.borrow() {
+                    nav.push(Route::Detail(id.clone()));
                 }
                 s.selected = Some(id);
             }
@@ -333,6 +347,9 @@ impl Store {
             Action::ClearSelection => {
                 s.selected = None;
                 s.detail = None;
+                if let Some(ref nav) = *self.navigator.borrow() {
+                    nav.pop();
+                }
             }
 
             Action::ToggleFilterInstalled => {
