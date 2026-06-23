@@ -195,19 +195,19 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, selected: bool, upgrades_mode:
         }))
     .child((
         Column(Modifier::new().flex_grow(1.0)).child((
-            Row(Modifier::new()).child((
-                Text(pkg.id.name.clone())
-                    .size(FONT_LG)
-                    .color(Color::from_hex(TEXT_PRIMARY)),
-                Space(Modifier::new().width(8.0)),
-                source_badge(&pkg),
-                Space(Modifier::new().width(4.0)),
-                if pkg.installed {
-                    installed_badge()
-                } else {
-                    Box(Modifier::new())
-                },
-            )),
+        Row(Modifier::new().align_items(AlignItems::Center)).child((
+            Text(pkg.id.name.clone())
+                .size(FONT_LG)
+                .color(Color::from_hex(TEXT_PRIMARY)),
+            Space(Modifier::new().width(8.0)),
+            source_badge(&pkg),
+            Space(Modifier::new().width(4.0)),
+            if pkg.installed {
+                installed_badge()
+            } else {
+                Box(Modifier::new())
+            },
+        )),
             Space(Modifier::new().height(4.0)),
             Text(pkg.description.clone())
                 .size(FONT_SM)
@@ -287,7 +287,7 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
     };
 
     let header = Column(Modifier::new().fill_max_width()).child((
-        Row(Modifier::new()).child((
+        Row(Modifier::new().align_items(AlignItems::Center)).child((
             Text(summary.id.name.clone())
                 .size(FONT_XL)
                 .color(Color::from_hex(TEXT_PRIMARY)),
