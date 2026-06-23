@@ -228,43 +228,50 @@ jobs:
   #   env:
   #     APP_NAME: "soredowe"
   #     APP_SLUG: "soredowe"
-  #     ANDROID_API: "35"
-  #     ANDROID_BUILD_TOOLS: "35.0.0"
-  #     ANDROID_NDK_VERSION: "27.0.12077973"
-  #     RUST_TOOLCHAIN: "1.90.0"
+  #     ANDROID_API: "36"
+  #     ANDROID_BUILD_TOOLS: "36.0.0"
+  #     ANDROID_NDK_VERSION: "28.2.13676358"
   #     ANDROID_TARGET: "aarch64-linux-android"
-  #     LILV_TERMUX_LIB: ${{ github.workspace }}/third_party/android/termux/aarch64/sysroot/data/data/com.termux/files/usr/lib
+  #     CARGO_RAPK_VERSION: "0.15.8"
+  #     ANDROID_D8_VERSION: "8.10.9-dev"
+  #     JAVA_VERSION: "21"
+  #     JAVA_DISTRIBUTION: "temurin"
   #   steps:
   #     - uses: actions/checkout@v5
   #       with:
   #         ref: ${{ needs.prepare-version.outputs.commit_sha }}
-      
-  #     - name: Verify Termux libraries presence
-  #       shell: bash
-  #       run: |
-  #         set -euo pipefail
-  #         test -d "$LILV_TERMUX_LIB" || { echo "Missing Termux libs at $LILV_TERMUX_LIB"; exit 1; }
-  #         if [ ! -f "$LILV_TERMUX_LIB/pkgconfig/lilv-0.pc" ]; then
-  #           echo "Missing $LILV_TERMUX_LIB/pkgconfig/lilv-0.pc (ensure termux libs are committed or provided)"; exit 1;
-  #         fi
+
+  #     - uses: actions/setup-java@v5
+  #       with:
+  #         java-version: ${{ env.JAVA_VERSION }}
+  #         distribution: ${{ env.JAVA_DISTRIBUTION }}
+
   #     - name: Set up Android SDK/NDK
   #       uses: android-actions/setup-android@v3
+
   #     - name: Install Android platforms and NDK
   #       shell: bash
   #       run: |
   #         sdkmanager --install \
   #           "platform-tools" \
-  #           "platforms;android-${ANDROID_API}" \
-  #           "build-tools;${ANDROID_BUILD_TOOLS}" \
-  #           "ndk;${ANDROID_NDK_VERSION}"
-  #     - name: Install Rust (host) + Android target
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.RUST_TOOLCHAIN }}
-  #         targets: ${{ env.ANDROID_TARGET }}
-  #     - name: Install cargo-apk
+  #           "platforms;android-${{ env.ANDROID_API }}" \
+  #           "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" \
+  #           "ndk;${{ env.ANDROID_NDK_VERSION }}"
+
+  #     - name: Install Rust Android target
+  #       run: rustup target add ${{ env.ANDROID_TARGET }}
+
+  #     - name: Install cargo-rapk
   #       shell: bash
-  #       run: cargo install cargo-apk --locked
+  #       run: cargo install cargo-rapk@${{ env.CARGO_RAPK_VERSION }} --locked
+
+  #     - name: Download pinned D8 jar
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         curl -fsSL -o "$RUNNER_TEMP/d8.jar" \
+  #           "https://storage.googleapis.com/r8-releases/raw/${{ env.ANDROID_D8_VERSION }}/r8.jar"
+  #         echo "ANDROID_D8_JAR=$RUNNER_TEMP/d8.jar" >> "$GITHUB_ENV"
 
   #     - name: Prepare release keystore
   #       shell: bash
@@ -307,16 +314,21 @@ jobs:
   #           mv release.single.jks release.keystore
   #         fi
 
-  #         echo "CARGO_APK_RELEASE_KEYSTORE=$PWD/release.keystore" >> "$GITHUB_ENV"
-  #         echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$KS_PASS"      >> "$GITHUB_ENV"
+  #         echo "CARGO_RAPK_RELEASE_KEYSTORE=$PWD/release.keystore" >> "$GITHUB_ENV"
+  #         echo "CARGO_RAPK_RELEASE_KEYSTORE_PASSWORD=$KS_PASS"      >> "$GITHUB_ENV"
 
   #     - name: Build Android APK (release, aarch64)
   #       shell: bash
   #       env:
-  #         TAG: ${{ needs.prepare-version.outputs.version_name }} 
+  #         TAG: ${{ needs.prepare-version.outputs.tag }}
   #       run: |
   #         set -euo pipefail
-  #         cargo apk build --release --target $ANDROID_TARGET --lib
+  #         export ANDROID_NDK="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
+  #         export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
+  #         export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/${{ env.ANDROID_NDK_VERSION }}"
+  #         export ANDROID_BUILD_TOOLS="${{ env.ANDROID_BUILD_TOOLS }}"
+
+  #         cargo rapk build --release --target ${{ env.ANDROID_TARGET }} --lib -p app_shell
   #         OUT_DIR="target/release/apk"
   #         APK_SRC=$(ls -1t "$OUT_DIR"/*.apk | head -n1)
   #         VER="${TAG#v}"
@@ -335,6 +347,7 @@ jobs:
     needs:
       - prepare-version
       - build
+      # - build-android
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts

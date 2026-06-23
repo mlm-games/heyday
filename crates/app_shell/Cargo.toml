@@ -3,6 +3,15 @@ name = "app_shell"
 version.workspace = true
 edition.workspace = true
 
+# [package.metadata.android]
+# package = "org.mlm.soredowe"
+# label = "Soredowe"
+# build_targets = ["aarch64-linux-android"]
+
+# [package.metadata.android.sdk]
+# min_sdk_version = 29
+# target_sdk_version = 36
+
 [dependencies]
 repose-platform.workspace = true
 repose-ui.workspace = true
