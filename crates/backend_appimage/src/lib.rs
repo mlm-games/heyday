@@ -76,10 +76,13 @@ impl PackageBackend for AppImageBackend {
                 popular: None,
                 last_updated: None,
             },
+            description: None,
             depends: vec![],
             opt_depends: vec![],
             homepage: None,
+            license: None,
             maintainer: None,
+            developer: None,
             size_install: Some(size),
             size_download: None,
         })

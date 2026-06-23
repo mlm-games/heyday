@@ -344,10 +344,10 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
                     Text(summary.description.clone())
                         .size(FONT_BASE)
                         .color(Color::from_hex(TEXT_SECONDARY))
-                        .max_lines(6)
+                        .max_lines(8)
                         .overflow_ellipsize(),
                     Space(Modifier::new().height(4.0)),
-                    Text(format!("v{}", summary.version))
+                    Text(format!("v{}", summary.version.trim_start_matches('v')))
                         .size(FONT_SM)
                         .color(Color::from_hex(TEXT_DIMMED)),
                 )),
@@ -361,24 +361,60 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
 }
 
 fn details_body(det: &PackageDetails) -> View {
-    Column(Modifier::new().fill_max_width()).child((
-        detail_row("Homepage", det.homepage.as_deref().unwrap_or("")),
-        detail_row("Maintainer", det.maintainer.as_deref().unwrap_or("unknown")),
-        detail_row(
-            "Install size",
-            &det.size_install
-                .map(|b| format_bytes(b))
-                .unwrap_or_default(),
-        ),
-        detail_row(
-            "Download",
-            &det.size_download
-                .map(|b| format_bytes(b))
-                .unwrap_or_default(),
-        ),
-        tag_list("Dependencies", &det.depends),
-        tag_list("Optional deps", &det.opt_depends),
-    ))
+    let mut rows: Vec<View> = Vec::new();
+
+    let long_desc = det.description.as_deref().unwrap_or("");
+    if !long_desc.is_empty() && long_desc != det.summary.description {
+        rows.push(
+            Text(long_desc.to_string())
+                .size(FONT_BASE)
+                .color(Color::from_hex(TEXT_SECONDARY))
+                .modifier(Modifier::new().margin_vertical(8.0)),
+        );
+    }
+
+    let mut info_rows: Vec<View> = Vec::new();
+    if let Some(ref h) = det.homepage {
+        if !h.is_empty() {
+            info_rows.push(detail_row("Homepage", h));
+        }
+    }
+    if let Some(ref l) = det.license {
+        info_rows.push(detail_row("License", l));
+    }
+    if let Some(ref d) = det.developer {
+        info_rows.push(detail_row("Developer", d));
+    }
+    if let Some(ref m) = det.maintainer {
+        info_rows.push(detail_row("Maintainer", m));
+    }
+    if let Some(s) = det.size_install {
+        info_rows.push(detail_row("Install size", &format_bytes(s)));
+    }
+    if let Some(s) = det.size_download {
+        info_rows.push(detail_row("Download size", &format_bytes(s)));
+    }
+    if !info_rows.is_empty() {
+        rows.push(
+            Column(Modifier::new()
+                .fill_max_width()
+                .padding(12.0)
+                .margin_vertical(8.0)
+                .background(Color::from_hex(CARD_BG))
+                .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                .clip_rounded(R_MD))
+            .child(info_rows)
+        );
+    }
+
+    if !det.depends.is_empty() {
+        rows.push(tag_list("Dependencies", &det.depends));
+    }
+    if !det.opt_depends.is_empty() {
+        rows.push(tag_list("Optional deps", &det.opt_depends));
+    }
+
+    Column(Modifier::new().fill_max_width()).child(rows)
 }
 
 fn status_bar(store: &Rc<Store>, s: &AppState) -> View {

@@ -38,10 +38,13 @@ pub struct PackageSummary {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageDetails {
     pub summary: PackageSummary,
+    pub description: Option<String>,
     pub depends: Vec<String>,
     pub opt_depends: Vec<String>,
     pub homepage: Option<String>,
+    pub license: Option<String>,
     pub maintainer: Option<String>,
+    pub developer: Option<String>,
     pub size_install: Option<u64>,
     pub size_download: Option<u64>,
 }

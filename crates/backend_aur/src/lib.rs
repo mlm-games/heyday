@@ -31,6 +31,8 @@ pub struct AurPkg {
     last_modified: Option<u64>,
     #[serde(rename = "URL")]
     url: Option<String>,
+    #[serde(rename = "License", default)]
+    license: Option<Vec<String>>,
     #[serde(rename = "Depends")]
     depends: Option<Vec<String>>,
     #[serde(rename = "OptDepends")]
@@ -237,10 +239,13 @@ impl PackageBackend for AurBackend {
             .collect::<Vec<_>>();
         Ok(PackageDetails {
             summary,
+            description: None,
             depends: p.depends.unwrap_or_default(),
             opt_depends: opt_names,
             homepage: p.url,
+            license: p.license.as_ref().map(|v| v.join(", ")),
             maintainer: p.maintainer,
+            developer: None,
             size_install: None,
             size_download: None,
         })

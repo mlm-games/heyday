@@ -331,8 +331,10 @@ impl PackageBackend for AlpmBackend {
                     last_updated: None,
                 };
 
+                let long_desc = pkg.desc().unwrap_or("").to_string();
                 return Ok(PackageDetails {
                     summary,
+                    description: Some(long_desc).filter(|d| !d.is_empty()),
                     depends: pkg
                         .depends()
                         .into_iter()
@@ -346,7 +348,9 @@ impl PackageBackend for AlpmBackend {
                         .filter(|s| !s.is_empty())
                         .collect(),
                     homepage: pkg.url().map(|s| s.to_string()),
+                    license: None,
                     maintainer: pkg.packager().map(|s| s.to_string()),
+                    developer: None,
                     size_install: Some(pkg.isize() as u64),
                     size_download: Some(pkg.download_size() as u64),
                 });

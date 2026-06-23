@@ -1,24 +1,214 @@
 use domain::*;
+use flate2::read::GzDecoder;
 use libflatpak::{
     gio::Cancellable,
-    glib,
-    prelude::*,
+    glib, prelude::*,
     Installation, Transaction,
 };
+use quick_xml::events::Event;
+use quick_xml::Reader as XmlReader;
 use std::{
     cell::Cell,
-    process::Command,
+    collections::HashMap,
+    fs,
+    io::{BufReader, Read},
     rc::Rc,
 };
 
+#[derive(Clone, Debug, Default)]
+struct FlatpakAppInfo {
+    name: String,
+    summary: String,
+    description: String,
+    version: Option<String>,
+    license: Option<String>,
+    developer: Option<String>,
+    homepage: Option<String>,
+}
+
+/// Stream-parse one appstream XML file, return (app-id -> info).
+fn parse_appstream_xml<R: Read>(reader: R) -> HashMap<String, FlatpakAppInfo> {
+    let mut map = HashMap::new();
+
+    // We need to decompress gzip first, then wrap in buffered reader
+    let decoder = GzDecoder::new(reader);
+    let mut xml = XmlReader::from_reader(BufReader::new(decoder));
+    xml.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut in_component = false;
+    let mut info = FlatpakAppInfo::default();
+    let mut id = String::new();
+    let mut current_tag = String::new();
+    let mut in_desc = false;
+    let mut in_url = false;
+    let mut url_type = String::new();
+    let mut text_buf = String::new();
+    let mut in_releases = false;
+
+    loop {
+        match xml.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "component" {
+                    in_component = true;
+                    info = FlatpakAppInfo::default();
+                    id.clear();
+                } else if in_component {
+                    // Only capture first (non-locale) variant
+                    let has_lang = e
+                        .attributes()
+                        .any(|a| a.ok().is_some_and(|a| a.key.as_ref() == b"xml:lang"));
+                    if !has_lang {
+                        if tag == "description" {
+                            in_desc = true;
+                        } else if tag == "url" {
+                            in_url = true;
+                            url_type = e
+                                .attributes()
+                                .filter_map(|a| a.ok())
+                                .find(|a| a.key.as_ref() == b"type")
+                                .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
+                                .unwrap_or_default();
+                        } else if tag == "releases" {
+                            in_releases = true;
+                        } else if tag == "release" && in_releases && info.version.is_none() {
+                            info.version = e
+                                .attributes()
+                                .filter_map(|a| a.ok())
+                                .find(|a| a.key.as_ref() == b"version")
+                                .and_then(|a| String::from_utf8(a.value.to_vec()).ok());
+                        }
+                        current_tag = tag;
+                    } else {
+                        current_tag.clear();
+                    }
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if in_component && tag == "release" && in_releases && info.version.is_none() {
+                    info.version = e
+                        .attributes()
+                        .filter_map(|a| a.ok())
+                        .find(|a| a.key.as_ref() == b"version")
+                        .and_then(|a| String::from_utf8(a.value.to_vec()).ok());
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if tag == "component" {
+                    in_component = false;
+                    if !id.is_empty() {
+                        info.description = text_buf.trim().to_string();
+                        text_buf.clear();
+                        map.insert(id.clone(), info.clone());
+                    }
+                } else if in_component {
+                    match tag.as_str() {
+                        "description" => in_desc = false,
+                        "url" => {
+                            in_url = false;
+                            url_type.clear();
+                        }
+                        "releases" => in_releases = false,
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_component {
+                    let txt = String::from_utf8_lossy(e.as_ref()).to_string();
+                    if in_desc {
+                        text_buf.push_str(&txt);
+                        text_buf.push(' ');
+                    } else if !current_tag.is_empty() {
+                        let val = txt.clone();
+                        match current_tag.as_str() {
+                            "id" => id = txt,
+                            "name" => info.name = txt,
+                            "summary" => info.summary = txt,
+                            "project_license" => info.license = Some(txt),
+                            "developer_name" => info.developer = Some(txt),
+                            _ => {}
+                        }
+                        if in_url && url_type == "homepage" {
+                            info.homepage = Some(val);
+                            in_url = false;
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                log::warn!("appstream XML parse error: {e}");
+                break;
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    map
+}
+
+/// Find and parse all appstream XML files for a flatpak installation.
+fn load_appstream_cache(user: bool) -> HashMap<String, FlatpakAppInfo> {
+    let inst = if user {
+        Installation::new_user(Cancellable::NONE)
+    } else {
+        Installation::new_system(Cancellable::NONE)
+    };
+    let inst = match inst {
+        Ok(i) => i,
+        Err(_) => return HashMap::new(),
+    };
+
+    let remotes = match inst.list_remotes(Cancellable::NONE) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+
+    let mut all = HashMap::new();
+    for remote in &remotes {
+        let dir = match remote.appstream_dir(None).and_then(|x| x.path()) {
+            Some(p) => p,
+            None => continue,
+        };
+        let file = if dir.join("appstream.xml.gz").is_file() {
+            dir.join("appstream.xml.gz")
+        } else if dir.join("appstream.xml").is_file() {
+            dir.join("appstream.xml")
+        } else {
+            continue;
+        };
+        let reader = match fs::File::open(&file) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("failed to open appstream file {:?}: {e}", file);
+                continue;
+            }
+        };
+        log::info!("loading appstream cache from {:?}", file);
+        let apps = parse_appstream_xml(reader);
+        all.extend(apps);
+    }
+    all
+}
+
 pub struct FlatpakBackend {
     user: bool,
+    app_cache: HashMap<String, FlatpakAppInfo>,
 }
 
 impl FlatpakBackend {
     pub fn new(user: bool) -> Self {
         glib::set_application_name("soredowe");
-        Self { user }
+        let cache = load_appstream_cache(user);
+        Self {
+            user,
+            app_cache: cache,
+        }
     }
 
     fn installation(&self) -> std::result::Result<Installation, Error> {
@@ -42,17 +232,21 @@ impl FlatpakBackend {
         None
     }
 
-    fn summary_from_ref<R>(r: &R) -> Option<PackageSummary>
+    fn summary_from_ref<R>(r: &R, app_cache: &HashMap<String, FlatpakAppInfo>) -> Option<PackageSummary>
     where
         R: RefExt + InstalledRefExt,
     {
-        let name: String = r.name()?.to_string();
-        let origin: String = r.origin().unwrap_or_default().to_string();
+        let name = r.name()?.to_string();
+        let origin = r.origin().unwrap_or_default().to_string();
         let version: String = r.appdata_version().unwrap_or_default().to_string();
-        let description: String = r
-            .appdata_name()
-            .unwrap_or_else(|| name.clone().into())
-            .to_string();
+        let app_info = app_cache.get(&name);
+        let description = app_info
+            .map(|a| a.summary.clone())
+            .or_else(|| {
+                r.appdata_name()
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
         Some(PackageSummary {
             id: PackageId {
                 name,
@@ -157,6 +351,7 @@ impl PackageBackend for FlatpakBackend {
             if let Some(name) = remote.name() {
                 log::info!("updating flatpak remote {name}");
                 let _ = inst.update_remote_sync(&name, Cancellable::NONE);
+                let _ = inst.update_appstream_sync(&name, None, Cancellable::NONE);
             }
         }
         Ok(())
@@ -168,17 +363,8 @@ impl PackageBackend for FlatpakBackend {
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<Vec<PackageSummary>> {
-        let output = Command::new("flatpak")
-            .args([
-                "search",
-                "--columns=application,version,description,origin",
-                "--",
-                q,
-            ])
-            .output()
-            .map_err(|e| Error::Flatpak(format!("flatpak search failed: {e}")))?;
-
-        if !output.status.success() {
+        let q = q.to_lowercase();
+        if q.len() < 2 {
             return Ok(vec![]);
         }
 
@@ -189,44 +375,28 @@ impl PackageBackend for FlatpakBackend {
             .map(|p| p.id.name)
             .collect();
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut results = Vec::new();
-
-        for line in stdout.lines().skip(1) {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let mut cols = line.split('\t');
-            let name = match cols.next() {
-                Some(n) => n.trim(),
-                None => continue,
-            };
-            if name.is_empty() {
-                continue;
-            }
-            let version = cols.next().unwrap_or("").trim();
-            let description = cols.next().unwrap_or("").trim();
-            let origin = cols.next().unwrap_or("").trim();
-
-            results.push(PackageSummary {
-                id: PackageId {
-                    name: name.to_string(),
-                    source: Source::Flatpak,
-                    repo: if origin.is_empty() {
-                        None
-                    } else {
-                        Some(origin.to_string())
+        let mut results: Vec<PackageSummary> = Vec::new();
+        for (app_id, info) in &self.app_cache {
+            let id_lower = app_id.to_lowercase();
+            let name_lower = info.name.to_lowercase();
+            let summary_lower = info.summary.to_lowercase();
+            if id_lower.contains(&q) || name_lower.contains(&q) || summary_lower.contains(&q) {
+                results.push(PackageSummary {
+                    id: PackageId {
+                        name: app_id.clone(),
+                        source: Source::Flatpak,
+                        repo: Some("flathub".to_string()),
                     },
-                },
-                version: version.to_string(),
-                description: description.to_string(),
-                installed: installed.contains(name),
-                popular: None,
-                last_updated: None,
-            });
+                    version: info.version.clone().unwrap_or_default(),
+                    description: info.summary.clone(),
+                    installed: installed.contains(app_id.as_str()),
+                    popular: None,
+                    last_updated: None,
+                });
+            }
         }
 
+        results.sort_by(|a, b| a.id.name.cmp(&b.id.name));
         Ok(results)
     }
 
@@ -236,50 +406,53 @@ impl PackageBackend for FlatpakBackend {
         _sink: &ProgressSink,
         _cancel: &CancelToken,
     ) -> Result<PackageDetails> {
-        let output = Command::new("flatpak")
-            .args(["info", "--", &id.name])
-            .output()
-            .map_err(|e| Error::Flatpak(format!("flatpak info failed: {e}")))?;
+        let info = self.app_cache.get(&id.name);
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut version = String::new();
-        let mut description = String::new();
-        let mut homepage = None;
-
-        for line in stdout.lines() {
-            let line = line.trim();
-            if let Some(v) = line.strip_prefix("Version:") {
-                version = v.trim().to_string();
-            } else if let Some(d) = line.strip_prefix("Description:") {
-                description = d.trim().to_string();
-            } else if let Some(h) = line.strip_prefix("Homepage:") {
-                let h = h.trim();
-                if !h.is_empty() && h != "-" {
-                    homepage = Some(h.to_string());
+    let mut version = String::new();
+    let mut size_install = None;
+    let mut is_installed = false;
+    if let Ok(inst) = self.installation() {
+        if let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) {
+            for r in &refs {
+                if r.name().as_deref() == Some(&id.name) {
+                    is_installed = true;
+                    version = r.appdata_version().unwrap_or_default().to_string();
+                    let install_size = r.installed_size();
+                    if install_size > 0 {
+                        size_install = Some(install_size);
+                    }
+                    break;
                 }
-            } else if version.is_empty() && line.starts_with("Version:") {
-                version = line
-                    .strip_prefix("Version:")
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
             }
         }
+    }
+    if version.is_empty() {
+        version = info.and_then(|i| i.version.clone()).unwrap_or_default();
+    }
 
-        Ok(PackageDetails {
-            summary: PackageSummary {
-                id: id.clone(),
-                version,
-                description,
-                installed: true,
-                popular: None,
-                last_updated: None,
-            },
+    Ok(PackageDetails {
+        summary: PackageSummary {
+            id: id.clone(),
+            version,
+            description: info
+                .as_ref()
+                .map(|i| i.summary.clone())
+                .unwrap_or_default(),
+            installed: is_installed,
+            popular: None,
+            last_updated: None,
+        },
+            description: info.as_ref().and_then(|i| {
+                let d = i.description.trim();
+                if d.is_empty() { None } else { Some(d.to_string()) }
+            }),
             depends: vec![],
             opt_depends: vec![],
-            homepage,
+            homepage: info.as_ref().and_then(|i| i.homepage.clone()),
+            license: info.as_ref().and_then(|i| i.license.clone()),
             maintainer: None,
-            size_install: None,
+            developer: info.as_ref().and_then(|i| i.developer.clone()),
+            size_install,
             size_download: None,
         })
     }
@@ -291,7 +464,7 @@ impl PackageBackend for FlatpakBackend {
             .map_err(|e| Error::Flatpak(e.to_string()))?;
         let mut results = Vec::new();
         for r in &refs {
-            if let Some(s) = Self::summary_from_ref(r) {
+            if let Some(s) = Self::summary_from_ref(r, &self.app_cache) {
                 results.push(s);
             }
         }
@@ -305,7 +478,7 @@ impl PackageBackend for FlatpakBackend {
             .map_err(|e| Error::Flatpak(e.to_string()))?;
         let mut results = Vec::new();
         for r in &refs {
-            if let Some(s) = Self::summary_from_ref(r) {
+            if let Some(s) = Self::summary_from_ref(r, &self.app_cache) {
                 results.push(s);
             }
         }

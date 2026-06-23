@@ -116,10 +116,10 @@ fn collect(
                 on_progress(pct);
             }
             "Package" => {
-                let (info, package_id, summary): (u32, String, String) = msg
-                    .body()
-                    .deserialize()
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                let (info, package_id, summary): (u32, String, String) =
+                    msg.body()
+                        .deserialize()
+                        .map_err(|e| Error::Alpm(e.to_string()))?;
                 packages.push(PkgInfo {
                     _info: info,
                     package_id,
@@ -230,9 +230,9 @@ impl PackageBackend for PackageKitBackend {
             .map_err(|e| Error::Alpm(e.to_string()))?;
         let (_details, packages) = collect(txn, cancel, &mut |_| {})?;
 
-        let first_pkg = packages.first().ok_or_else(|| {
-            Error::Alpm(format!("{} not found", id.name))
-        })?;
+        let first_pkg = packages
+            .first()
+            .ok_or_else(|| Error::Alpm(format!("{} not found", id.name)))?;
         let (_name, version) = parse_pkg_id(&first_pkg.package_id);
 
         Ok(PackageDetails {
@@ -244,10 +244,13 @@ impl PackageBackend for PackageKitBackend {
                 popular: None,
                 last_updated: None,
             },
+            description: None,
             depends: vec![],
             opt_depends: vec![],
             homepage: None,
+            license: None,
             maintainer: None,
+            developer: None,
             size_install: None,
             size_download: None,
         })
@@ -315,24 +318,18 @@ impl PackageBackend for PackageKitBackend {
         cancel: &CancelToken,
         _progress: Box<dyn FnMut(f32) + Send + 'static>,
     ) -> Result<()> {
-        let package_ids: Vec<&str> =
-            op.package_ids.iter().map(|p| p.name.as_str()).collect();
+        let package_ids: Vec<&str> = op.package_ids.iter().map(|p| p.name.as_str()).collect();
 
         let txn = self.txn()?;
 
         let filter = match op.kind {
             OperationKind::Remove { .. } => Filter::Installed as u64,
-            _ => {
-                (Filter::NotInstalled as u64)
-                    | (Filter::Newest as u64)
-                    | (Filter::Arch as u64)
-            }
+            _ => (Filter::NotInstalled as u64) | (Filter::Newest as u64) | (Filter::Arch as u64),
         };
         txn.resolve(filter, &package_ids)
             .map_err(|e| Error::Alpm(e.to_string()))?;
         let (_detail, resolved) = collect(txn, cancel, &mut |_| {})?;
-        let resolved_ids: Vec<String> =
-            resolved.into_iter().map(|p| p.package_id).collect();
+        let resolved_ids: Vec<String> = resolved.into_iter().map(|p| p.package_id).collect();
         let refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
 
         if refs.is_empty() {
