@@ -117,17 +117,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
         )),
         Space(Modifier::new().height(8.0)),
         Row(Modifier::new().fill_max_width()).child(vec![
-            chip("Repo", s.filter_repo, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterRepo)
-            }),
-            Space(Modifier::new().width(6.0)),
-            chip("AUR", s.filter_aur, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterAur)
-            }),
-            Space(Modifier::new().width(6.0)),
-            chip("Installed", s.filter_installed, {
+            chip("Installed only", s.filter_installed, {
                 let store = store.clone();
                 move || store.dispatch(Action::ToggleFilterInstalled)
             }),
@@ -276,41 +266,15 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
     )
 }
 
-fn details_pane(store: Rc<Store>, s: &AppState) -> View {
+fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
     let Some(sel_id) = &s.selected else {
-        return empty_state("Package details", "Select a package on the left.");
+        return Box(Modifier::new());
     };
 
     let summary = match s.results.iter().find(|p| &p.id == sel_id) {
         Some(p) => p.clone(),
-        None => return empty_state("Package details", "Selection not in current results."),
+        None => return Box(Modifier::new()),
     };
-
-    let header = Column(Modifier::new().fill_max_width()).child((
-        Row(Modifier::new().align_items(AlignItems::Center)).child((
-            Text(summary.id.name.clone())
-                .size(FONT_XL)
-                .color(Color::from_hex(TEXT_PRIMARY)),
-            Space(Modifier::new().width(8.0)),
-            source_badge(&summary),
-            Space(Modifier::new().width(4.0)),
-            if summary.installed {
-                installed_badge()
-            } else {
-                Box(Modifier::new())
-            },
-        )),
-        Space(Modifier::new().height(4.0)),
-        Text(format!("v{}", summary.version))
-            .size(FONT_SM)
-            .color(Color::from_hex(TEXT_DIMMED)),
-        Space(Modifier::new().height(10.0)),
-        Text(summary.description.clone())
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_SECONDARY))
-            .max_lines(6)
-            .overflow_ellipsize(),
-    ));
 
     let actions = Row(Modifier::new().padding_values(PaddingValues {
         left: 0.0,
@@ -321,7 +285,7 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
     .child((
         pkg_action(&store, &summary, s.in_upgrades_view),
         Space(Modifier::new().width(8.0)),
-        secondary_button("Clear", {
+        secondary_button("Back", {
             let store = store.clone();
             move || store.dispatch(Action::ClearSelection)
         }),
@@ -342,13 +306,39 @@ fn details_pane(store: Rc<Store>, s: &AppState) -> View {
     ));
 
     ScrollArea(
-        Modifier::new()
-            .fill_max_width()
-            .height(PANE_HEIGHT_DP)
-            .then(card_mod()),
+        Modifier::new().fill_max_size().then(card_mod()),
         scroll,
-        Column(Modifier::new().fill_max_width().padding(16.0)).child((
-            header,
+        Column(Modifier::new().fill_max_size().padding(20.0)).child((
+            Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
+                Text(summary.id.name.clone())
+                    .size(FONT_2XL)
+                    .color(Color::from_hex(TEXT_PRIMARY)),
+                Spacer(),
+                secondary_button("Back", {
+                    let store = store.clone();
+                    move || store.dispatch(Action::ClearSelection)
+                }),
+            )),
+            Space(Modifier::new().height(6.0)),
+            Row(Modifier::new().align_items(AlignItems::Center)).child((
+                Text(format!("v{}", summary.version))
+                    .size(FONT_SM)
+                    .color(Color::from_hex(TEXT_DIMMED)),
+                Space(Modifier::new().width(8.0)),
+                source_badge(&summary),
+                if summary.installed {
+                    installed_badge()
+                } else {
+                    Box(Modifier::new())
+                },
+            )),
+            Space(Modifier::new().height(12.0)),
+            Text(summary.description.clone())
+                .size(FONT_BASE)
+                .color(Color::from_hex(TEXT_SECONDARY))
+                .max_lines(6)
+                .overflow_ellipsize(),
+            Space(Modifier::new().height(8.0)),
             divider(),
             actions,
             Space(Modifier::new().height(8.0)),
