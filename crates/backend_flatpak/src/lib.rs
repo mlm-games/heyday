@@ -43,68 +43,70 @@ fn load_appstream_cache(inst: &Installation) -> HashMap<String, AppstreamMeta> {
 }
 
 pub struct FlatpakBackend {
-    user: bool,
+    user_modes: Vec<bool>,
     app_cache: Mutex<HashMap<String, AppstreamMeta>>,
 }
 
 impl FlatpakBackend {
-    /// Return (installation, is_user, has_remotes)
-    fn try_installation(user: bool) -> (Option<Installation>, bool, bool) {
+    fn open_installation(user: bool) -> Option<Installation> {
         let inst = if user {
             Installation::new_user(Cancellable::NONE)
         } else {
             Installation::new_system(Cancellable::NONE)
         };
-        match inst {
-            Ok(i) => {
-                let has = i
-                    .list_remotes(Cancellable::NONE)
-                    .map(|r| !r.is_empty())
-                    .unwrap_or(false);
-                (Some(i), user, has)
-            }
-            Err(_) => (None, user, false),
-        }
+        inst.ok()
     }
 
-    pub fn new(user_request: bool) -> Result<Self> {
+    pub fn new(_user_request: bool) -> Result<Self> {
         glib::set_application_name("soredowe");
 
-        let first = Self::try_installation(user_request);
-        let second = Self::try_installation(!user_request);
+        let user_modes: Vec<bool> = [true, false]
+            .into_iter()
+            .filter(|u| Self::open_installation(*u).is_some())
+            .collect();
 
-        // Prefer whichever has remotes; fall back to whichever works
-        let (inst, working_user) = match (first, second) {
-            ((Some(i), _, true), _) => (i, user_request),
-            (_, (Some(i), _, true)) => (i, !user_request),
-            ((Some(i), u, false), _) => (i, u),
-            (_, (Some(i), u, false)) => (i, u),
-            _ => return Err(Error::Flatpak("no flatpak installation found".into())),
+        if user_modes.is_empty() {
+            return Err(Error::Flatpak("no flatpak installation found".into()));
+        }
+
+        let cache = {
+            let mut merged = HashMap::new();
+            for u in &user_modes {
+                if let Some(inst) = Self::open_installation(*u) {
+                    let _ = inst.drop_caches(Cancellable::NONE);
+                    merged.extend(load_appstream_cache(&inst));
+                }
+            }
+            merged
         };
 
-        let cache = load_appstream_cache(&inst);
         Ok(Self {
-            user: working_user,
+            user_modes,
             app_cache: Mutex::new(cache),
         })
     }
 
-    fn installation(&self) -> std::result::Result<Installation, Error> {
-        let inst = if self.user {
-            Installation::new_user(Cancellable::NONE)
-        } else {
-            Installation::new_system(Cancellable::NONE)
-        };
-        inst.map_err(|e| Error::Flatpak(e.to_string()))
+    fn with_each_installation(
+        &self,
+        f: &mut dyn FnMut(&Installation),
+    ) {
+        for u in &self.user_modes {
+            if let Some(inst) = Self::open_installation(*u) {
+                f(&inst);
+            }
+        }
     }
 
-    fn installed_ref_str(&self, name: &str) -> Option<String> {
-        let inst = self.installation().ok()?;
-        let refs: Vec<libflatpak::InstalledRef> =
-            inst.list_installed_refs(Cancellable::NONE).ok()?;
-        for r in &refs {
-            if r.name().as_deref() == Some(name) {
-                return r.format_ref().map(|s| s.to_string());
+    fn find_installed_ref(&self, name: &str) -> Option<(String, bool)> {
+        for u in &self.user_modes {
+            let Some(inst) = Self::open_installation(*u) else { continue };
+            let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) else { continue };
+            for r in &refs {
+                if r.name().as_deref() == Some(name) {
+                    if let Some(ref_str) = r.format_ref().map(|s| s.to_string()) {
+                        return Some((ref_str, *u));
+                    }
+                }
             }
         }
         None
@@ -140,11 +142,14 @@ impl FlatpakBackend {
     }
 
     fn name_to_ref(name: &str) -> String {
-        format!("app/{name}/x86_64/stable")
+        let arch = std::env::consts::ARCH;
+        format!("app/{name}/{arch}/stable")
     }
 
-    fn with_transaction(
+    fn with_transaction_on(
         &self,
+        user: bool,
+        stage: Stage,
         setup: impl FnOnce(&Transaction) -> std::result::Result<(), glib::Error>,
         sink: &ProgressSink,
         cancel: &CancelToken,
@@ -152,7 +157,8 @@ impl FlatpakBackend {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let inst = self.installation()?;
+        let inst = Self::open_installation(user)
+            .ok_or_else(|| Error::Flatpak("installation unavailable".into()))?;
         let tx = Transaction::for_installation(&inst, Cancellable::NONE)
             .map_err(|e| Error::Flatpak(e.to_string()))?;
 
@@ -197,7 +203,7 @@ impl FlatpakBackend {
             while let Ok(pct) = rx_prog_inner.recv() {
                 let _ = sink.send(Progress {
                     job_id: 0,
-                    stage: Stage::Installing,
+                    stage,
                     percent: Some(pct),
                     bytes: None,
                     log: None,
@@ -213,6 +219,18 @@ impl FlatpakBackend {
         let _ = jh.join();
         result
     }
+
+    fn with_transaction(
+        &self,
+        stage: Stage,
+        setup: impl FnOnce(&Transaction) -> std::result::Result<(), glib::Error>,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        // Use the first available installation
+        let user = *self.user_modes.first().unwrap_or(&true);
+        self.with_transaction_on(user, stage, setup, sink, cancel)
+    }
 }
 
 impl PackageBackend for FlatpakBackend {
@@ -221,25 +239,37 @@ impl PackageBackend for FlatpakBackend {
     }
 
     fn refresh(&self, sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
-        let inst = self.installation()?;
-        let remotes: Vec<libflatpak::Remote> = inst
-            .list_remotes(Cancellable::NONE)
-            .map_err(|e| Error::Flatpak(e.to_string()))?;
-        for remote in &remotes {
-            if let Some(name) = remote.name() {
-                let _ = sink.send(Progress {
-                    job_id: 0,
-                    stage: Stage::Searching,
-                    percent: None,
-                    bytes: None,
-                    log: Some(format!("updating flatpak remote: {name}")),
-                    warning: false,
-                });
-                let _ = inst.update_remote_sync(&name, Cancellable::NONE);
-                let _ = inst.update_appstream_sync(&name, None, Cancellable::NONE);
+        for u in &self.user_modes {
+            let Some(inst) = Self::open_installation(*u) else { continue };
+            let Ok(remotes) = inst.list_remotes(Cancellable::NONE) else { continue };
+            for remote in &remotes {
+                if let Some(name) = remote.name() {
+                    let _ = sink.send(Progress {
+                        job_id: 0,
+                        stage: Stage::Searching,
+                        percent: None,
+                        bytes: None,
+                        log: Some(format!("updating flatpak remote: {name}")),
+                        warning: false,
+                    });
+                    if let Err(e) = inst.update_remote_sync(&name, Cancellable::NONE) {
+                        log::warn!("failed to update remote {name}: {e}");
+                    }
+                    if let Err(e) = inst.update_appstream_sync(&name, None, Cancellable::NONE) {
+                        log::warn!("failed to update appstream for {name}: {e}");
+                    }
+                }
             }
         }
-        *self.app_cache.lock().unwrap() = load_appstream_cache(&inst);
+        // Reload cache from all installations
+        let mut merged = HashMap::new();
+        for u in &self.user_modes {
+            if let Some(inst) = Self::open_installation(*u) {
+                let _ = inst.drop_caches(Cancellable::NONE);
+                merged.extend(load_appstream_cache(&inst));
+            }
+        }
+        *self.app_cache.lock().unwrap() = merged;
         Ok(())
     }
 
@@ -299,7 +329,9 @@ impl PackageBackend for FlatpakBackend {
         let mut version = String::new();
         let mut size_install = None;
         let mut is_installed = false;
-        if let Ok(inst) = self.installation() {
+        'outer: for u in &self.user_modes {
+            let Some(inst) = Self::open_installation(*u) else { continue };
+            let _ = inst.drop_caches(Cancellable::NONE);
             if let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) {
                 for r in &refs {
                     if r.name().as_deref() == Some(&id.name) {
@@ -309,7 +341,7 @@ impl PackageBackend for FlatpakBackend {
                         if install_size > 0 {
                             size_install = Some(install_size);
                         }
-                        break;
+                        break 'outer;
                     }
                 }
             }
@@ -347,30 +379,32 @@ impl PackageBackend for FlatpakBackend {
     }
 
     fn installed(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
-        let inst = self.installation()?;
-        let refs: Vec<libflatpak::InstalledRef> = inst
-            .list_installed_refs(Cancellable::NONE)
-            .map_err(|e| Error::Flatpak(e.to_string()))?;
         let cache = self.app_cache.lock().unwrap();
         let mut results = Vec::new();
-        for r in &refs {
-            if let Some(s) = Self::summary_from_ref(r, &*cache) {
-                results.push(s);
+        for u in &self.user_modes {
+            let Some(inst) = Self::open_installation(*u) else { continue };
+            let _ = inst.drop_caches(Cancellable::NONE);
+            let Ok(refs) = inst.list_installed_refs(Cancellable::NONE) else { continue };
+            for r in &refs {
+                if let Some(s) = Self::summary_from_ref(r, &*cache) {
+                    results.push(s);
+                }
             }
         }
         Ok(results)
     }
 
     fn updates(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
-        let inst = self.installation()?;
-        let refs: Vec<libflatpak::InstalledRef> = inst
-            .list_installed_refs_for_update(Cancellable::NONE)
-            .map_err(|e| Error::Flatpak(e.to_string()))?;
         let cache = self.app_cache.lock().unwrap();
         let mut results = Vec::new();
-        for r in &refs {
-            if let Some(s) = Self::summary_from_ref(r, &*cache) {
-                results.push(s);
+        for u in &self.user_modes {
+            let Some(inst) = Self::open_installation(*u) else { continue };
+            let _ = inst.drop_caches(Cancellable::NONE);
+            let Ok(refs) = inst.list_installed_refs_for_update(Cancellable::NONE) else { continue };
+            for r in &refs {
+                if let Some(s) = Self::summary_from_ref(r, &*cache) {
+                    results.push(s);
+                }
             }
         }
         Ok(results)
@@ -409,7 +443,11 @@ impl PackageBackend for FlatpakBackend {
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let remote = id.repo.as_deref().unwrap_or("flathub");
         let ref_str = Self::name_to_ref(&id.name);
-        self.with_transaction(
+        // Install to the first available installation (user-preferred)
+        let user = *self.user_modes.first().unwrap_or(&true);
+        self.with_transaction_on(
+            user,
+            Stage::Installing,
             |tx: &Transaction| {
                 tx.add_install(remote, &ref_str, &[])?;
                 Ok(())
@@ -420,10 +458,12 @@ impl PackageBackend for FlatpakBackend {
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let ref_str = self
-            .installed_ref_str(&id.name)
+        let (ref_str, user) = self
+            .find_installed_ref(&id.name)
             .ok_or_else(|| Error::Flatpak(format!("{} not installed", id.name)))?;
-        self.with_transaction(
+        self.with_transaction_on(
+            user,
+            Stage::Removing,
             move |tx: &Transaction| {
                 tx.add_uninstall(&ref_str)?;
                 Ok(())
@@ -434,10 +474,12 @@ impl PackageBackend for FlatpakBackend {
     }
 
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let ref_str = self
-            .installed_ref_str(&id.name)
+        let (ref_str, user) = self
+            .find_installed_ref(&id.name)
             .ok_or_else(|| Error::Flatpak(format!("{} not installed", id.name)))?;
-        self.with_transaction(
+        self.with_transaction_on(
+            user,
+            Stage::Installing,
             move |tx: &Transaction| {
                 tx.add_update(&ref_str, &[], None)?;
                 Ok(())
@@ -452,22 +494,42 @@ impl PackageBackend for FlatpakBackend {
         if updates.is_empty() {
             return Ok(());
         }
-        let refs: Vec<String> = updates
-            .iter()
-            .filter_map(|u| self.installed_ref_str(&u.id.name))
-            .collect();
+        let mut refs: Vec<(String, bool)> = Vec::new();
+        for u in &self.user_modes {
+            let Some(inst) = Self::open_installation(*u) else { continue };
+            let _ = inst.drop_caches(Cancellable::NONE);
+            let Ok(urefs) = inst.list_installed_refs_for_update(Cancellable::NONE) else { continue };
+            for r in &urefs {
+                if let Some(ref_str) = r.format_ref().map(|s| s.to_string()) {
+                    refs.push((ref_str, *u));
+                }
+            }
+        }
         if refs.is_empty() {
             return Ok(());
         }
-        self.with_transaction(
-            |tx: &Transaction| {
-                for r in &refs {
-                    tx.add_update(r, &[], None)?;
-                }
-                Ok(())
-            },
-            sink,
-            cancel,
-        )
+        // Group by installation type
+        for u in &self.user_modes {
+            let batch: Vec<&str> = refs.iter()
+                .filter(|(_, mode)| mode == u)
+                .map(|(r, _)| r.as_str())
+                .collect();
+            if batch.is_empty() {
+                continue;
+            }
+            self.with_transaction_on(
+                *u,
+                Stage::Installing,
+                |tx: &Transaction| {
+                    for r in batch {
+                        tx.add_update(r, &[], None)?;
+                    }
+                    Ok(())
+                },
+                sink,
+                cancel,
+            )?;
+        }
+        Ok(())
     }
 }
