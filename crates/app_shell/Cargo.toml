@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["backend-alpm", "backend-aur", "backend-flatpak"]
+default = ["backend-alpm", "backend-aur", "backend-flatpak", "backend-appimage"]
 backend-alpm = ["dep:backend_alpm"]
 backend-packagekit = ["dep:backend_packagekit"]
 backend-aur = ["dep:backend_aur"]
