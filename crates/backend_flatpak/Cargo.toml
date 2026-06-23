@@ -1,10 +1,9 @@
 [package]
-name = "backend_pacman"
+name = "backend_flatpak"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 domain = { path = "../domain" }
-regex.workspace = true
-nix.workspace = true
-parking_lot.workspace = true
+libflatpak.workspace = true
+log.workspace = true

@@ -13,6 +13,8 @@ use std::{
 pub enum Source {
     Repo,
     Aur,
+    Flatpak,
+    AppImage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -81,7 +83,6 @@ pub enum Event {
     Upgrades {
         items: Vec<PackageSummary>,
     },
-    /// Sent when the system package state likely changed (install/remove/upgrade).
     SystemChanged,
 }
 
@@ -93,6 +94,10 @@ pub enum Error {
     Alpm(String),
     #[error("aur: {0}")]
     Aur(String),
+    #[error("flatpak: {0}")]
+    Flatpak(String),
+    #[error("appimage: {0}")]
+    AppImage(String),
     #[error("privilege: {0}")]
     Priv(String),
     #[error("cancelled")]
@@ -122,25 +127,65 @@ impl CancelToken {
 }
 pub type ProgressSink = chan::Sender<Progress>;
 
+/// A backend that manages a package source (repo, aur, flatpak, appimage).
 pub trait PackageBackend: Send + Sync {
+    fn name(&self) -> &'static str;
+
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
+
     fn search(
         &self,
         q: &str,
         sink: &ProgressSink,
         cancel: &CancelToken,
     ) -> Result<Vec<PackageSummary>>;
+
     fn details(
         &self,
         id: &PackageId,
         sink: &ProgressSink,
         cancel: &CancelToken,
     ) -> Result<PackageDetails>;
+
+    /// List all installed packages from this backend.
+    fn installed(&self, cancel: &CancelToken) -> Result<Vec<PackageSummary>>;
+
+    /// List all available updates from this backend.
+    fn updates(&self, cancel: &CancelToken) -> Result<Vec<PackageSummary>>;
+
+    /// Execute a privileged operation with progress reporting.
+    fn operation(
+        &self,
+        op: &Operation,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+        progress: Box<dyn FnMut(f32) + Send + 'static>,
+    ) -> Result<()>;
+
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
+
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
-    fn upgrades(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<Vec<PackageSummary>>;
+
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
+
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
+}
+
+/// What kind of operation to perform.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum OperationKind {
+    Install,
+    Remove { purge_data: bool },
+    Update,
+    Refresh,
+}
+
+/// A package management operation.
+#[derive(Clone, Debug)]
+pub struct Operation {
+    pub kind: OperationKind,
+    pub backend_name: &'static str,
+    pub package_ids: Vec<PackageId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -171,11 +216,23 @@ pub struct Job {
     pub cancel: CancelToken,
 }
 
+fn backend_matches(name: &str, source: &Source) -> bool {
+    match source {
+        Source::Repo => name == "alpm" || name == "packagekit",
+        Source::Aur => name == "aur",
+        Source::Flatpak => name == "flatpak",
+        Source::AppImage => name == "appimage",
+    }
+}
+
 static TXN_MUTEX: Mutex<()> = Mutex::new(());
 
 /// Returns the set of currently installed package names (via `pacman -Qq`).
 pub fn installed_package_names() -> HashSet<String> {
-    let out = std::process::Command::new("pacman").args(["-Qq"]).output().ok();
+    let out = std::process::Command::new("pacman")
+        .args(["-Qq"])
+        .output()
+        .ok();
     let mut set = HashSet::new();
     if let Some(out) = out {
         for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -189,8 +246,7 @@ pub fn installed_package_names() -> HashSet<String> {
 }
 
 pub struct Executor {
-    repo: Arc<dyn PackageBackend>,
-    aur: Arc<dyn PackageBackend>,
+    backends: Vec<(&'static str, Arc<dyn PackageBackend>)>,
     tx_prog: chan::Sender<Progress>,
     tx_evt: chan::Sender<Event>,
     rx_jobs: chan::Receiver<Job>,
@@ -199,15 +255,13 @@ pub struct Executor {
 
 impl Executor {
     pub fn new(
-        repo: Arc<dyn PackageBackend>,
-        aur: Arc<dyn PackageBackend>,
+        backends: Vec<(&'static str, Arc<dyn PackageBackend>)>,
         tx_prog: chan::Sender<Progress>,
         tx_evt: chan::Sender<Event>,
         rx_jobs: chan::Receiver<Job>,
     ) -> Self {
         Self {
-            repo,
-            aur,
+            backends,
             tx_prog,
             tx_evt,
             rx_jobs,
@@ -222,7 +276,6 @@ impl Executor {
                 let tx_evt = self.tx_evt.clone();
                 let cancel = job.cancel.clone();
 
-                // Per-job progress channel: backends write here; we inject job_id and forward.
                 let (tx_local, rx_local) = chan::unbounded::<Progress>();
                 let fwd = {
                     let tx_prog = tx_prog.clone();
@@ -247,21 +300,21 @@ impl Executor {
                     });
                 };
 
-                let repo = &self.repo;
-                let aur = &self.aur;
+                let backends: Vec<&dyn PackageBackend> =
+                    self.backends.iter().map(|(_, b)| &**b).collect();
+                let selected = &self.backends;
                 let active_id = &mut self.active_search_id;
-                let pick = |payload: &JobPayload| -> &dyn PackageBackend {
-                    match payload {
-                        JobPayload::Package(id) if id.source == Source::Aur => &**aur,
-                        _ => &**repo,
-                    }
-                };
 
                 send_direct(Stage::Queued, None, false);
 
-                let mut run_job = || -> Result<()> {
+                let mut run_job = |backends: &[&dyn PackageBackend]| -> Result<()> {
                     match job.kind {
-                        JobKind::Refresh => pick(&job.payload).refresh(&tx_local, &cancel),
+                        JobKind::Refresh => {
+                            for b in backends {
+                                b.refresh(&tx_local, &cancel)?;
+                            }
+                            Ok(())
+                        }
                         JobKind::Search => {
                             *active_id = Some(job.id);
                             let q = if let JobPayload::Query(q) = &job.payload {
@@ -277,42 +330,18 @@ impl Executor {
                                 return Ok(());
                             }
 
-                            let mut any_ok = false;
                             let mut items: Vec<PackageSummary> = Vec::new();
-
-                            // Repo
-                            match repo.search(&q, &tx_local, &cancel) {
-                                Ok(mut v) => {
-                                    items.append(&mut v);
-                                    any_ok = true;
+                            for b in backends {
+                                match b.search(&q, &tx_local, &cancel) {
+                                    Ok(mut v) => items.append(&mut v),
+                                    Err(e) => {
+                                        send_direct(
+                                            Stage::Searching,
+                                            Some(format!("{} search failed: {e}", b.name())),
+                                            true,
+                                        );
+                                    }
                                 }
-                                Err(e) => {
-                                    send_direct(
-                                        Stage::Searching,
-                                        Some(format!("repo search failed: {e}")),
-                                        true,
-                                    );
-                                }
-                            }
-
-                            // AUR
-                            match aur.search(&q, &tx_local, &cancel) {
-                                Ok(mut v) => {
-                                    items.append(&mut v);
-                                    any_ok = true;
-                                }
-                                Err(e) => {
-                                    send_direct(
-                                        Stage::Searching,
-                                        Some(format!("AUR search failed: {e}")),
-                                        true,
-                                    );
-                                }
-                            }
-
-                            // If both failed, bubble a failure to the final Progress; otherwise continue.
-                            if !any_ok {
-                                return Err(Error::Alpm("all backends failed".into()));
                             }
 
                             items.sort_by(|a, b| a.id.name.cmp(&b.id.name));
@@ -325,17 +354,31 @@ impl Executor {
                         }
                         JobKind::Details => {
                             if let JobPayload::Package(id) = &job.payload {
-                                let det = pick(&job.payload).details(id, &tx_local, &cancel)?;
-                                tx_evt
-                                    .send(Event::Details { item: det })
-                                    .map_err(|e| Error::Internal(e.to_string()))?;
+                                if let Some(b) = selected
+                                    .iter()
+                                    .find(|(name, _)| backend_matches(name, &id.source))
+                                    .map(|(_, b)| &**b)
+                                {
+                                    let det = b.details(id, &tx_local, &cancel)?;
+                                    tx_evt
+                                        .send(Event::Details { item: det })
+                                        .map_err(|e| Error::Internal(e.to_string()))?;
+                                }
                             }
                             Ok(())
                         }
                         JobKind::Install => {
                             let _g = TXN_MUTEX.lock();
                             if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).install(id, &tx_local, &cancel)
+                                if let Some(b) = selected
+                                    .iter()
+                                    .find(|(name, _)| backend_matches(name, &id.source))
+                                    .map(|(_, b)| &**b)
+                                {
+                                    b.install(id, &tx_local, &cancel)
+                                } else {
+                                    Ok(())
+                                }
                             } else {
                                 Ok(())
                             }
@@ -343,35 +386,33 @@ impl Executor {
                         JobKind::Remove => {
                             let _g = TXN_MUTEX.lock();
                             if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).remove(id, &tx_local, &cancel)
+                                if let Some(b) = selected
+                                    .iter()
+                                    .find(|(name, _)| backend_matches(name, &id.source))
+                                    .map(|(_, b)| &**b)
+                                {
+                                    b.remove(id, &tx_local, &cancel)
+                                } else {
+                                    Ok(())
+                                }
                             } else {
                                 Ok(())
                             }
                         }
                         JobKind::Upgrades => {
-                            // Collect from both repo and AUR, but don’t fail the whole job
                             let mut items: Vec<PackageSummary> = Vec::new();
-                            match repo.upgrades(&tx_local, &cancel) {
-                                Ok(mut v) => items.append(&mut v),
-                                Err(e) => {
-                                    send_direct(
-                                        Stage::Verifying,
-                                        Some(format!("repo upgrades failed: {e}")),
-                                        true,
-                                    );
+                            for b in backends {
+                                match b.updates(&cancel) {
+                                    Ok(mut v) => items.append(&mut v),
+                                    Err(e) => {
+                                        send_direct(
+                                            Stage::Verifying,
+                                            Some(format!("{} upgrades failed: {e}", b.name())),
+                                            true,
+                                        );
+                                    }
                                 }
                             }
-                            match aur.upgrades(&tx_local, &cancel) {
-                                Ok(mut v) => items.append(&mut v),
-                                Err(e) => {
-                                    send_direct(
-                                        Stage::Verifying,
-                                        Some(format!("AUR upgrades failed: {e}")),
-                                        true,
-                                    );
-                                }
-                            }
-                            // Sort A-Z for stability; UI can re-sort
                             items.sort_by(|a, b| a.id.name.cmp(&b.id.name));
                             tx_evt
                                 .send(Event::Upgrades { items })
@@ -381,24 +422,32 @@ impl Executor {
                         JobKind::Upgrade => {
                             let _g = TXN_MUTEX.lock();
                             if let JobPayload::Package(id) = &job.payload {
-                                pick(&job.payload).upgrade(id, &tx_local, &cancel)
+                                if let Some(b) = selected
+                                    .iter()
+                                    .find(|(name, _)| backend_matches(name, &id.source))
+                                    .map(|(_, b)| &**b)
+                                {
+                                    b.upgrade(id, &tx_local, &cancel)
+                                } else {
+                                    Ok(())
+                                }
                             } else {
                                 Ok(())
                             }
                         }
                         JobKind::UpgradeAll => {
                             let _g = TXN_MUTEX.lock();
-                            // Minimal: perform repo full system upgrade; AUR can be expanded later.
-                            repo.upgrade_all(&tx_local, &cancel)?;
-                            // If you want AUR mass-upgrade later, we can iterate aur.upgrades() and call aur.upgrade(..).
+                            for b in backends {
+                                b.upgrade_all(&tx_local, &cancel)?;
+                            }
                             Ok(())
                         }
                     }
                 };
 
-                let res = run_job();
+                let res = run_job(&backends);
                 drop(tx_local);
-                fwd.join().ok(); // If forwarding thread panicked, progress stops but job result is unaffected.
+                fwd.join().ok();
                 if res.is_ok() {
                     match job.kind {
                         JobKind::Install
@@ -423,5 +472,3 @@ impl Executor {
         });
     }
 }
-
-

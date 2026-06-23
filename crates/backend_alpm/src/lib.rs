@@ -46,7 +46,6 @@ impl AlpmBackend {
     }
 }
 
-/// Parse `/etc/pacman.conf` for `[repo]` sections, excluding `[options]`.
 fn pacman_conf_repos() -> Vec<String> {
     let content = match std::fs::read_to_string("/etc/pacman.conf") {
         Ok(c) => c,
@@ -55,7 +54,8 @@ fn pacman_conf_repos() -> Vec<String> {
     let mut repos = Vec::new();
     for line in content.lines() {
         let t = line.trim();
-        if let Some(inner) = t.strip_prefix('[')
+        if let Some(inner) = t
+            .strip_prefix('[')
             .and_then(|s| s.strip_suffix(']'))
             .filter(|s| !s.eq_ignore_ascii_case("options"))
         {
@@ -143,13 +143,13 @@ fn run_stream(
                 let mut g = last_err_t2.lock();
                 *g = Some(l.clone());
             }
-            let (stage, percent) = parse_pacman_progress(&l)
+            let (stage, _pct) = parse_pacman_progress(&l)
                 .map(|(cur, total, stage)| (stage, Some(cur as f32 / total as f32)))
                 .unwrap_or((default_stage, None));
             let _ = tx2.send(Progress {
                 job_id: 0,
                 stage,
-                percent,
+                percent: None,
                 bytes: None,
                 log: Some(l),
                 warning: true,
@@ -198,45 +198,44 @@ fn send_log(sink: &ProgressSink, stage: Stage, msg: &str, warning: bool) {
     });
 }
 
+fn pkexec_pacman(
+    args: &[&str],
+    sink: &ProgressSink,
+    cancel: &CancelToken,
+    stage: Stage,
+) -> Result<()> {
+    let mut cmd = Command::new("pkexec");
+    cmd.arg("pacman");
+    cmd.args(args);
+    let (code, last_err) = run_stream(cmd, sink, cancel, stage)?;
+    if code == 0 {
+        Ok(())
+    } else {
+        let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+        Err(Error::Priv(format!("pacman exit {code}{why}")))
+    }
+}
+
 impl PackageBackend for AlpmBackend {
+    fn name(&self) -> &'static str {
+        "alpm"
+    }
+
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let pkg = id
             .repo
             .as_ref()
             .map(|r| format!("{r}/{}", id.name))
             .unwrap_or_else(|| id.name.clone());
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-S", "--noconfirm", "--needed", &pkg]);
-        let (code, last_err) = run_stream(cmd, sink, cancel, Stage::Installing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("install exit {code}{why}")))
-        }
+        pkexec_pacman(&["-S", "--noconfirm", "--needed", &pkg], sink, cancel, Stage::Installing)
     }
 
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let try_pkexec = || {
-            let mut cmd = Command::new("pkexec");
-            cmd.args(["pacman", "-Sy", "--noconfirm"]);
-            let (code, last_err) = run_stream(cmd, sink, cancel, Stage::Refreshing)?;
-            if code == 0 {
-                Ok(())
-            } else {
-                let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-                Err(Error::Alpm(format!("pacman -Sy exit {code}{why}")))
-            }
-        };
-        match try_pkexec() {
+        match pkexec_pacman(&["-Sy", "--noconfirm"], sink, cancel, Stage::Refreshing) {
             Ok(()) => Ok(()),
             Err(Error::Internal(e)) if e.contains("spawn:") => {
-                send_log(
-                    sink,
-                    Stage::Refreshing,
-                    "pkexec unavailable; attempting unprivileged refresh (may fail)",
-                    true,
-                );
+                send_log(sink, Stage::Refreshing,
+                    "pkexec unavailable; trying unprivileged refresh", true);
                 let mut cmd = Command::new("pacman");
                 cmd.args(["-Sy", "--noconfirm"]);
                 let (code, last_err) = run_stream(cmd, sink, cancel, Stage::Refreshing)?;
@@ -358,23 +357,30 @@ impl PackageBackend for AlpmBackend {
         Err(Error::Alpm("not found".into()))
     }
 
-    fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-Rns", "--noconfirm", &id.name]);
-        let (code, last_err) = run_stream(cmd, sink, cancel, Stage::Removing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("remove exit {code}{why}")))
-        }
+    fn installed(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        self.ensure()?;
+        let guard = self.handle.lock();
+        let handle = guard.as_ref().expect("alpm handle");
+        Ok(handle
+            .localdb()
+            .pkgs()
+            .into_iter()
+            .map(|p| PackageSummary {
+                id: PackageId {
+                    name: p.name().to_string(),
+                    source: Source::Repo,
+                    repo: None,
+                },
+                version: p.version().as_str().to_string(),
+                description: p.desc().unwrap_or("").to_string(),
+                installed: true,
+                popular: None,
+                last_updated: None,
+            })
+            .collect())
     }
 
-    fn upgrades(
-        &self,
-        sink: &ProgressSink,
-        cancel: &CancelToken,
-    ) -> Result<Vec<PackageSummary>> {
+    fn updates(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
         self.ensure()?;
 
         let guard = self.handle.lock();
@@ -383,9 +389,6 @@ impl PackageBackend for AlpmBackend {
         let mut results = Vec::new();
 
         for pkg in local.pkgs() {
-            if cancel.is_cancelled() {
-                return Err(Error::Cancelled);
-            }
             let name = pkg.name();
             for db in handle.syncdbs() {
                 if let Ok(sync_pkg) = db.pkg(name) {
@@ -409,24 +412,53 @@ impl PackageBackend for AlpmBackend {
                 }
             }
         }
-
-        send_log(sink, Stage::Verifying, &format!("repo: {} upgrades", results.len()), false);
         Ok(results)
     }
 
+    fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        pkexec_pacman(&["-Rns", "--noconfirm", &id.name], sink, cancel, Stage::Removing)
+    }
+
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        self.install(id, sink, cancel)
+        let pkg = id
+            .repo
+            .as_ref()
+            .map(|r| format!("{r}/{}", id.name))
+            .unwrap_or_else(|| id.name.clone());
+        pkexec_pacman(&["-S", "--noconfirm", &pkg], sink, cancel, Stage::Installing)
     }
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let mut cmd = Command::new("pkexec");
-        cmd.args(["pacman", "-Syu", "--noconfirm"]);
-        let (code, last_err) = run_stream(cmd, sink, cancel, Stage::Installing)?;
-        if code == 0 {
-            Ok(())
-        } else {
-            let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
-            Err(Error::Priv(format!("upgrade-all exit {code}{why}")))
+        pkexec_pacman(&["-Syu", "--noconfirm"], sink, cancel, Stage::Installing)
+    }
+
+    fn operation(
+        &self,
+        op: &Operation,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+        _progress: Box<dyn FnMut(f32) + Send + 'static>,
+    ) -> Result<()> {
+        match op.kind {
+            OperationKind::Install => {
+                for id in &op.package_ids {
+                    self.install(id, sink, cancel)?;
+                }
+                Ok(())
+            }
+            OperationKind::Remove { .. } => {
+                for id in &op.package_ids {
+                    self.remove(id, sink, cancel)?;
+                }
+                Ok(())
+            }
+            OperationKind::Update => {
+                for id in &op.package_ids {
+                    self.upgrade(id, sink, cancel)?;
+                }
+                Ok(())
+            }
+            OperationKind::Refresh => self.refresh(sink, cancel),
         }
     }
 }

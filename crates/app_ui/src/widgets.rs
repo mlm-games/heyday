@@ -32,6 +32,12 @@ pub fn aur_badge() -> View {
 pub fn repo_badge() -> View {
     badge("Repo", TEAL, TEAL_BG)
 }
+pub fn flatpak_badge() -> View {
+    badge("Flatpak", "#3584e4", "#1a1a2e")
+}
+pub fn appimage_badge() -> View {
+    badge("AppImage", "#f9a03c", "#2e1a0a")
+}
 pub fn installed_badge() -> View {
     badge("Installed", INDIGO, INDIGO_BG)
 }
@@ -56,6 +62,8 @@ fn repo_colors(repo: &str) -> (String, String) {
 pub fn source_badge(pkg: &PackageSummary) -> View {
     match pkg.id.source {
         Source::Aur => aur_badge(),
+        Source::Flatpak => flatpak_badge(),
+        Source::AppImage => appimage_badge(),
         Source::Repo => {
             if let Some(repo) = &pkg.id.repo {
                 let (fg, bg) = repo_colors(repo);

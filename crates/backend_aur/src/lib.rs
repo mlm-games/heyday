@@ -98,8 +98,32 @@ fn find_built_pkg(name: &str, dir: &PathBuf) -> Option<PathBuf> {
 }
 
 impl PackageBackend for AurBackend {
+    fn name(&self) -> &'static str {
+        "aur"
+    }
+
     fn refresh(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         Ok(())
+    }
+
+    fn installed(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        Ok(vec![])
+    }
+
+    fn updates(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        Ok(vec![]) // Not preferable
+    }
+
+    fn operation(
+        &self,
+        _op: &Operation,
+        _sink: &ProgressSink,
+        _cancel: &CancelToken,
+        _progress: Box<dyn FnMut(f32) + Send + 'static>,
+    ) -> Result<()> {
+        Err(Error::Aur(
+            "direct operation not supported, use install/remove".into(),
+        ))
     }
 
     fn search(
@@ -364,10 +388,6 @@ impl PackageBackend for AurBackend {
         } else {
             Err(Error::Priv("remove failed".into()))
         }
-    }
-
-    fn upgrades(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
-        Ok(vec![]) // repo upgrades are implemented, would not be preferable to update apps already in repo with aur versions
     }
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         // For AUR, “upgrade” is just “rebuild & install latest”.
