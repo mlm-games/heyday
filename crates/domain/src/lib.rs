@@ -1,3 +1,5 @@
+pub mod appstream;
+
 use crossbeam_channel as chan;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};

@@ -596,10 +596,8 @@ name = "backend_flatpak"
 version = "0.4.0"
 dependencies = [
  "domain",
- "flate2",
  "libflatpak",
  "log",
- "quick-xml 0.40.1",
 ]
 
 [[package]]
@@ -1133,7 +1131,10 @@ name = "domain"
 version = "0.4.0"
 dependencies = [
  "crossbeam-channel",
+ "flate2",
+ "log",
  "parking_lot",
+ "quick-xml 0.40.1",
  "serde",
  "thiserror 2.0.18",
 ]

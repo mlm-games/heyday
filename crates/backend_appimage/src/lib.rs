@@ -18,6 +18,14 @@ struct AppImageEntry {
     update_url: Option<String>,
     update_pattern: Option<String>,
     local_size: u64,
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default)]
+    developer: Option<String>,
+    #[serde(default)]
+    homepage: Option<String>,
+    #[serde(default)]
+    long_description: Option<String>,
 }
 
 type Config = HashMap<String, AppImageEntry>;
@@ -90,6 +98,53 @@ fn try_extract_7z(appimage: &str, tmpdir: &str, bin: &str) -> Option<std::proces
         .output()
         .ok()
         .filter(|o| o.status.success())
+}
+
+fn extract_metainfo(appimage: &str) -> Option<domain::appstream::AppstreamMeta> {
+    for bin in &["7zz", "7z"] {
+        let output = std::process::Command::new(bin)
+            .args([
+                "x",
+                appimage,
+                "-o/tmp/soredowe-metainfo",
+                "-ir!usr/share/metainfo/",
+                "-ir!usr/share/appdata/",
+                "-y",
+                "-aoa",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success());
+        if output.is_some() {
+            break;
+        }
+    }
+
+    let dir = Path::new("/tmp/soredowe-metainfo");
+    let found = find_metainfo_files(dir).into_iter().find_map(|p| {
+        let file = fs::File::open(&p).ok()?;
+        let map = domain::appstream::parse_appstream_xml(file);
+        map.into_values().next()
+    });
+    let _ = fs::remove_dir_all(dir);
+    found
+}
+
+fn find_metainfo_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(find_metainfo_files(&path));
+            } else if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.ends_with(".metainfo.xml") || name.ends_with(".appdata.xml") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    files
 }
 
 fn extract_desktop_entry(appimage: &str) -> Option<(String, String)> {
@@ -385,13 +440,13 @@ impl PackageBackend for AppImageBackend {
                 popular: None,
                 last_updated: meta.modified().ok(),
             },
-            description,
+            description: description.or_else(|| entry.and_then(|e| e.long_description.clone())),
             depends: vec![],
             opt_depends: vec![],
-            homepage: None,
-            license: None,
+            homepage: entry.and_then(|e| e.homepage.clone()),
+            license: entry.and_then(|e| e.license.clone()),
             maintainer: None,
-            developer: None,
+            developer: entry.and_then(|e| e.developer.clone()),
             size_install: Some(meta.len()),
             size_download: None,
         })
@@ -664,18 +719,27 @@ impl PackageBackend for AppImageBackend {
 
         let (upd_api_url, upd_pattern) = extract_upd_info(&dest).unzip();
 
+        let meta = extract_metainfo(&dest);
+        let ver = version.or_else(|| meta.as_ref().and_then(|m| m.version.clone()));
+
         let mut cfg = read_config();
         cfg.insert(
             app_name.clone(),
             AppImageEntry {
                 path: dest,
-                version: version.unwrap_or_default(),
+                version: ver.unwrap_or_default(),
                 name: app_name.clone(),
                 desktop_file,
                 download_url: Some(url.to_string()),
                 update_url: upd_api_url,
                 update_pattern: upd_pattern,
                 local_size,
+                license: meta.as_ref().and_then(|m| m.license.clone()),
+                developer: meta.as_ref().and_then(|m| m.developer.clone()),
+                homepage: meta.as_ref().and_then(|m| m.homepage.clone()),
+                long_description: meta.as_ref().and_then(|m| {
+                    if m.description.is_empty() { None } else { Some(m.description.clone()) }
+                }),
             },
         );
         write_config(&cfg);
@@ -730,18 +794,27 @@ impl PackageBackend for AppImageBackend {
         };
 
         let download_url = None; // local file, no download URL
+        let meta = extract_metainfo(&dest);
+        let ver = version.or_else(|| meta.as_ref().and_then(|m| m.version.clone()));
+
         let mut cfg = read_config();
         cfg.insert(
             app_name.clone(),
             AppImageEntry {
                 path: dest,
-                version: version.unwrap_or_default(),
+                version: ver.unwrap_or_default(),
                 name: app_name.clone(),
                 desktop_file,
                 download_url,
                 update_url: upd_api_url,
                 update_pattern: upd_pattern,
                 local_size,
+                license: meta.as_ref().and_then(|m| m.license.clone()),
+                developer: meta.as_ref().and_then(|m| m.developer.clone()),
+                homepage: meta.as_ref().and_then(|m| m.homepage.clone()),
+                long_description: meta.as_ref().and_then(|m| {
+                    if m.description.is_empty() { None } else { Some(m.description.clone()) }
+                }),
             },
         );
         write_config(&cfg);

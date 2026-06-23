@@ -1,159 +1,20 @@
 use domain::*;
-use flate2::read::GzDecoder;
 use libflatpak::{
     gio::Cancellable,
     glib, prelude::*,
     Installation, Transaction,
 };
-use quick_xml::events::Event;
-use quick_xml::Reader as XmlReader;
 use std::{
     cell::Cell,
     collections::HashMap,
     fs,
-    io::{BufReader, Read},
     rc::Rc,
 };
 
-#[derive(Clone, Debug, Default)]
-struct FlatpakAppInfo {
-    name: String,
-    summary: String,
-    description: String,
-    version: Option<String>,
-    license: Option<String>,
-    developer: Option<String>,
-    homepage: Option<String>,
-}
-
-/// Stream-parse one appstream XML file, return (app-id -> info).
-fn parse_appstream_xml<R: Read>(reader: R) -> HashMap<String, FlatpakAppInfo> {
-    let mut map = HashMap::new();
-
-    // We need to decompress gzip first, then wrap in buffered reader
-    let decoder = GzDecoder::new(reader);
-    let mut xml = XmlReader::from_reader(BufReader::new(decoder));
-    xml.config_mut().trim_text(true);
-
-    let mut buf = Vec::new();
-    let mut in_component = false;
-    let mut info = FlatpakAppInfo::default();
-    let mut id = String::new();
-    let mut current_tag = String::new();
-    let mut in_desc = false;
-    let mut in_url = false;
-    let mut url_type = String::new();
-    let mut text_buf = String::new();
-    let mut in_releases = false;
-
-    loop {
-        match xml.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "component" {
-                    in_component = true;
-                    info = FlatpakAppInfo::default();
-                    id.clear();
-                } else if in_component {
-                    // Only capture first (non-locale) variant
-                    let has_lang = e
-                        .attributes()
-                        .any(|a| a.ok().is_some_and(|a| a.key.as_ref() == b"xml:lang"));
-                    if !has_lang {
-                        if tag == "description" {
-                            in_desc = true;
-                        } else if tag == "url" {
-                            in_url = true;
-                            url_type = e
-                                .attributes()
-                                .filter_map(|a| a.ok())
-                                .find(|a| a.key.as_ref() == b"type")
-                                .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
-                                .unwrap_or_default();
-                        } else if tag == "releases" {
-                            in_releases = true;
-                        } else if tag == "release" && in_releases && info.version.is_none() {
-                            info.version = e
-                                .attributes()
-                                .filter_map(|a| a.ok())
-                                .find(|a| a.key.as_ref() == b"version")
-                                .and_then(|a| String::from_utf8(a.value.to_vec()).ok());
-                        }
-                        current_tag = tag;
-                    } else {
-                        current_tag.clear();
-                    }
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if in_component && tag == "release" && in_releases && info.version.is_none() {
-                    info.version = e
-                        .attributes()
-                        .filter_map(|a| a.ok())
-                        .find(|a| a.key.as_ref() == b"version")
-                        .and_then(|a| String::from_utf8(a.value.to_vec()).ok());
-                }
-            }
-            Ok(Event::End(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if tag == "component" {
-                    in_component = false;
-                    if !id.is_empty() {
-                        info.description = text_buf.trim().to_string();
-                        text_buf.clear();
-                        map.insert(id.clone(), info.clone());
-                    }
-                } else if in_component {
-                    match tag.as_str() {
-                        "description" => in_desc = false,
-                        "url" => {
-                            in_url = false;
-                            url_type.clear();
-                        }
-                        "releases" => in_releases = false,
-                        _ => {}
-                    }
-                }
-            }
-            Ok(Event::Text(ref e)) => {
-                if in_component {
-                    let txt = String::from_utf8_lossy(e.as_ref()).to_string();
-                    if in_desc {
-                        text_buf.push_str(&txt);
-                        text_buf.push(' ');
-                    } else if !current_tag.is_empty() {
-                        let val = txt.clone();
-                        match current_tag.as_str() {
-                            "id" => id = txt,
-                            "name" => info.name = txt,
-                            "summary" => info.summary = txt,
-                            "project_license" => info.license = Some(txt),
-                            "developer_name" => info.developer = Some(txt),
-                            _ => {}
-                        }
-                        if in_url && url_type == "homepage" {
-                            info.homepage = Some(val);
-                            in_url = false;
-                        }
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                log::warn!("appstream XML parse error: {e}");
-                break;
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    map
-}
+use domain::appstream::AppstreamMeta;
 
 /// Find and parse all appstream XML files for a flatpak installation.
-fn load_appstream_cache(user: bool) -> HashMap<String, FlatpakAppInfo> {
+fn load_appstream_cache(user: bool) -> HashMap<String, AppstreamMeta> {
     let inst = if user {
         Installation::new_user(Cancellable::NONE)
     } else {
@@ -175,10 +36,10 @@ fn load_appstream_cache(user: bool) -> HashMap<String, FlatpakAppInfo> {
             Some(p) => p,
             None => continue,
         };
-        let file = if dir.join("appstream.xml.gz").is_file() {
-            dir.join("appstream.xml.gz")
+        let (file, gzipped) = if dir.join("appstream.xml.gz").is_file() {
+            (dir.join("appstream.xml.gz"), true)
         } else if dir.join("appstream.xml").is_file() {
-            dir.join("appstream.xml")
+            (dir.join("appstream.xml"), false)
         } else {
             continue;
         };
@@ -190,7 +51,11 @@ fn load_appstream_cache(user: bool) -> HashMap<String, FlatpakAppInfo> {
             }
         };
         log::info!("loading appstream cache from {:?}", file);
-        let apps = parse_appstream_xml(reader);
+        let apps = if gzipped {
+            domain::appstream::parse_appstream_xml_gz(reader)
+        } else {
+            domain::appstream::parse_appstream_xml(reader)
+        };
         all.extend(apps);
     }
     all
@@ -198,7 +63,7 @@ fn load_appstream_cache(user: bool) -> HashMap<String, FlatpakAppInfo> {
 
 pub struct FlatpakBackend {
     user: bool,
-    app_cache: HashMap<String, FlatpakAppInfo>,
+    app_cache: HashMap<String, AppstreamMeta>,
 }
 
 impl FlatpakBackend {
@@ -232,7 +97,7 @@ impl FlatpakBackend {
         None
     }
 
-    fn summary_from_ref<R>(r: &R, app_cache: &HashMap<String, FlatpakAppInfo>) -> Option<PackageSummary>
+    fn summary_from_ref<R>(r: &R, app_cache: &HashMap<String, AppstreamMeta>) -> Option<PackageSummary>
     where
         R: RefExt + InstalledRefExt,
     {
