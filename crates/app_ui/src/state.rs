@@ -45,6 +45,10 @@ pub struct AppState {
     /// Full details for the selected package (fetched lazily).
     pub detail: Option<PackageDetails>,
 
+    pub filter_repo: bool,
+    pub filter_aur: bool,
+    pub filter_flatpak: bool,
+    pub filter_appimage: bool,
     pub filter_installed: bool,
     pub sort: SortMode,
 
@@ -65,7 +69,14 @@ impl AppState {
             .raw_results
             .iter()
             .cloned()
-            .filter(|x| !self.filter_installed || x.installed)
+            .filter(|x| {
+                let active = |enabled: bool, source: Source| enabled && x.id.source == source;
+                (active(self.filter_repo, Source::Repo)
+                    || active(self.filter_aur, Source::Aur)
+                    || active(self.filter_flatpak, Source::Flatpak)
+                    || active(self.filter_appimage, Source::AppImage))
+                    && (!self.filter_installed || x.installed)
+            })
             .collect();
 
         match self.sort {
@@ -119,6 +130,10 @@ pub enum Action {
     Event(Event),
     Select(PackageId),
     ClearSelection,
+    ToggleFilterRepo,
+    ToggleFilterAur,
+    ToggleFilterFlatpak,
+    ToggleFilterAppImage,
     ToggleFilterInstalled,
     SetSort(SortMode),
     ToggleLog,
@@ -135,6 +150,10 @@ pub struct Store {
 impl Store {
     pub fn new(tx_jobs: chan::Sender<domain::Job>, snackbar: Option<SnackbarController>) -> Self {
         let s = AppState {
+            filter_repo: true,
+            filter_aur: true,
+            filter_flatpak: true,
+            filter_appimage: true,
             sort: SortMode::default(),
             ..Default::default()
         };
@@ -352,10 +371,11 @@ impl Store {
                 }
             }
 
-            Action::ToggleFilterInstalled => {
-                s.filter_installed = !s.filter_installed;
-                s.refilter();
-            }
+            Action::ToggleFilterRepo => { s.filter_repo = !s.filter_repo; s.refilter(); }
+            Action::ToggleFilterAur => { s.filter_aur = !s.filter_aur; s.refilter(); }
+            Action::ToggleFilterFlatpak => { s.filter_flatpak = !s.filter_flatpak; s.refilter(); }
+            Action::ToggleFilterAppImage => { s.filter_appimage = !s.filter_appimage; s.refilter(); }
+            Action::ToggleFilterInstalled => { s.filter_installed = !s.filter_installed; s.refilter(); }
             Action::SetSort(m) => {
                 s.sort = m;
                 s.refilter();

@@ -10,6 +10,12 @@ pub const CARD_SURFACE: &str = "#1A2332";
 pub const AUR_BG: &str = "#14112E";
 pub const AUR_BORDER: &str = "#4338CA";
 
+pub const FLATPAK_BG: &str = "#0E1628";
+pub const FLATPAK_BORDER: &str = "#3584e4";
+
+pub const APPIMAGE_BG: &str = "#1C0F08";
+pub const APPIMAGE_BORDER: &str = "#f9a03c";
+
 pub const SEL_BG: &str = "#172554";
 pub const SEL_BORDER: &str = "#3B82F6";
 

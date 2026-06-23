@@ -119,6 +119,26 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
         )),
         Space(Modifier::new().height(8.0)),
         Row(Modifier::new().fill_max_width()).child(vec![
+            chip("Repo", s.filter_repo, {
+                let store = store.clone();
+                move || store.dispatch(Action::ToggleFilterRepo)
+            }),
+            Space(Modifier::new().width(6.0)),
+            chip("AUR", s.filter_aur, {
+                let store = store.clone();
+                move || store.dispatch(Action::ToggleFilterAur)
+            }),
+            Space(Modifier::new().width(6.0)),
+            chip("Flatpak", s.filter_flatpak, {
+                let store = store.clone();
+                move || store.dispatch(Action::ToggleFilterFlatpak)
+            }),
+            Space(Modifier::new().width(6.0)),
+            chip("AppImage", s.filter_appimage, {
+                let store = store.clone();
+                move || store.dispatch(Action::ToggleFilterAppImage)
+            }),
+            Space(Modifier::new().width(6.0)),
             chip("Installed only", s.filter_installed, {
                 let store = store.clone();
                 move || store.dispatch(Action::ToggleFilterInstalled)
@@ -162,12 +182,11 @@ fn pkg_action(store: &Rc<Store>, pkg: &PackageSummary, upgrades_mode: bool) -> V
 }
 
 fn pkg_row(store: Rc<Store>, pkg: PackageSummary, _selected: bool, upgrades_mode: bool) -> View {
-    let is_aur = pkg.id.source == Source::Aur;
-
-    let (bg, border) = if is_aur {
-        (AUR_BG, AUR_BORDER)
-    } else {
-        (CARD_BG, CARD_BORDER)
+    let (bg, border) = match pkg.id.source {
+        Source::Aur => (AUR_BG, AUR_BORDER),
+        Source::Flatpak => (FLATPAK_BG, FLATPAK_BORDER),
+        Source::AppImage => (APPIMAGE_BG, APPIMAGE_BORDER),
+        Source::Repo => (CARD_BG, CARD_BORDER),
     };
 
     Row(Modifier::new()
