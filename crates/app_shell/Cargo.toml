@@ -3,14 +3,13 @@ name = "app_shell"
 version.workspace = true
 edition.workspace = true
 
-# [package.metadata.android]
-# package = "org.mlm.soredowe"
-# label = "Soredowe"
-# build_targets = ["aarch64-linux-android"]
-
-# [package.metadata.android.sdk]
-# min_sdk_version = 29
-# target_sdk_version = 36
+[features]
+default = ["backend-alpm", "backend-aur", "backend-flatpak"]
+backend-alpm = ["dep:backend_alpm"]
+backend-packagekit = ["dep:backend_packagekit"]
+backend-aur = ["dep:backend_aur"]
+backend-flatpak = ["dep:backend_flatpak"]
+backend-appimage = ["dep:backend_appimage"]
 
 [dependencies]
 repose-platform.workspace = true
@@ -20,9 +19,20 @@ crossbeam-channel.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true
 domain = { path = "../domain" }
-backend_alpm = { path = "../backend_alpm" }
-backend_aur = { path = "../backend_aur" }
-backend_flatpak = { path = "../backend_flatpak" }
+backend_alpm = { path = "../backend_alpm", optional = true }
+backend_packagekit = { path = "../backend_packagekit", optional = true }
+backend_aur = { path = "../backend_aur", optional = true }
+backend_flatpak = { path = "../backend_flatpak", optional = true }
+backend_appimage = { path = "../backend_appimage", optional = true }
 app_ui = { path = "../app_ui" }
 notify.workspace = true
 log.workspace = true
+
+# [package.metadata.android]
+# package = "org.mlm.soredowe"
+# label = "Soredowe"
+# build_targets = ["aarch64-linux-android"]
+
+# [package.metadata.android.sdk]
+# min_sdk_version = 29
+# target_sdk_version = 36

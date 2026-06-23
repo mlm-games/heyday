@@ -16,13 +16,21 @@ use app_ui::{
     root_view,
     state::{Action, Store},
 };
-use backend_alpm::AlpmBackend;
-use backend_aur::AurBackend;
-use backend_flatpak::FlatpakBackend;
 use domain::{Executor, PackageBackend};
 use log::error;
 use repose_platform::run_desktop_app;
 use repose_ui::overlay::{OverlayHandle, SnackbarController};
+
+#[cfg(feature = "backend-alpm")]
+use backend_alpm::AlpmBackend;
+#[cfg(feature = "backend-packagekit")]
+use backend_packagekit::PackageKitBackend;
+#[cfg(feature = "backend-aur")]
+use backend_aur::AurBackend;
+#[cfg(feature = "backend-flatpak")]
+use backend_flatpak::FlatpakBackend;
+#[cfg(feature = "backend-appimage")]
+use backend_appimage::AppImageBackend;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -32,15 +40,41 @@ fn main() -> anyhow::Result<()> {
     let (tx_evt, rx_evt) = chan::unbounded();
     let (tx_watch, rx_watch) = chan::unbounded::<()>();
 
-    let repo: Arc<dyn PackageBackend> = Arc::new(AlpmBackend::new());
-    let aur: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
-    let flatpak_user: Arc<dyn PackageBackend> = Arc::new(FlatpakBackend::new(true));
+    #[allow(unused_mut)]
+    let mut backends: Vec<(&'static str, Arc<dyn PackageBackend>)> = Vec::new();
 
-    let backends: Vec<(&'static str, Arc<dyn PackageBackend>)> = vec![
-        (repo.name(), repo),
-        (aur.name(), aur),
-        (flatpak_user.name(), flatpak_user),
-    ];
+    #[cfg(feature = "backend-alpm")]
+    {
+        let repo: Arc<dyn PackageBackend> = Arc::new(AlpmBackend::new());
+        backends.push((repo.name(), repo));
+    }
+
+    #[cfg(feature = "backend-packagekit")]
+    match PackageKitBackend::new() {
+        Ok(pk) => {
+            let pk: Arc<dyn PackageBackend> = Arc::new(pk);
+            backends.push((pk.name(), pk));
+        }
+        Err(e) => error!("PackageKit backend unavailable: {e}"),
+    }
+
+    #[cfg(feature = "backend-aur")]
+    {
+        let aur: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
+        backends.push((aur.name(), aur));
+    }
+
+    #[cfg(feature = "backend-flatpak")]
+    {
+        let flatpak: Arc<dyn PackageBackend> = Arc::new(FlatpakBackend::new(true));
+        backends.push((flatpak.name(), flatpak));
+    }
+
+    #[cfg(feature = "backend-appimage")]
+    {
+        let appimage: Arc<dyn PackageBackend> = Arc::new(AppImageBackend::new());
+        backends.push((appimage.name(), appimage));
+    }
 
     Executor::new(backends, tx_prog.clone(), tx_evt.clone(), rx_jobs).run();
 
@@ -52,7 +86,6 @@ fn main() -> anyhow::Result<()> {
     {
         spawn(move || {
             const LOCAL_DB: &str = "/var/lib/pacman/local";
-            // Debounce so we emit at most once per cooldown.
             let cooldown = Duration::from_millis(1200);
             let mut last = Instant::now() - cooldown;
 
@@ -75,7 +108,7 @@ fn main() -> anyhow::Result<()> {
                             | EventKind::Remove(RemoveKind::File)
                     );
                     if !is_meaningful_kind {
-                        return; // ignore Access/Metadata/etc.
+                        return;
                     }
 
                     let relevant = ev.paths.iter().any(|p| {
@@ -85,7 +118,6 @@ fn main() -> anyhow::Result<()> {
                         match ev.kind {
                             EventKind::Create(CreateKind::Folder)
                             | EventKind::Remove(RemoveKind::Folder) => {
-                                // Only act on directories directly under .../local (pkg-version dirs)
                                 p.parent()
                                     .map(|pp| pp == Path::new(LOCAL_DB))
                                     .unwrap_or(false)
@@ -113,7 +145,6 @@ fn main() -> anyhow::Result<()> {
                 "watcher failed -- check inotify limits (/proc/sys/fs/inotify/max_user_watches)",
             );
 
-            // Watch the local DB (recursive to see renames and file-level events as needed)
             if let Err(e) = watcher.watch(Path::new(LOCAL_DB), RecursiveMode::Recursive) {
                 error!("package DB watcher failed to start: {e}");
                 return;

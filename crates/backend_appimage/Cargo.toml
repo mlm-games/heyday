@@ -1,0 +1,9 @@
+[package]
+name = "backend_appimage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+ureq.workspace = true
+log.workspace = true

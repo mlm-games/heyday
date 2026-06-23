@@ -1,0 +1,9 @@
+[package]
+name = "backend_packagekit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+packagekit-zbus.workspace = true
+log.workspace = true

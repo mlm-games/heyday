@@ -4,6 +4,8 @@ members = [
   "crates/backend_alpm",
   "crates/backend_aur",
   "crates/backend_flatpak",
+  "crates/backend_packagekit",
+  "crates/backend_appimage",
   "crates/app_ui",
   "crates/app_shell",
 ]
@@ -30,6 +32,7 @@ log = "0.4"
 # Package management
 alpm = "5"
 libflatpak = "0.7"
+packagekit-zbus = "0.2"
 ureq = { version = "3", features = ["json"] }
 
 # UI
