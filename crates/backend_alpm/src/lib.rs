@@ -69,13 +69,8 @@ fn pacman_conf_repos() -> Vec<String> {
     }
 }
 
-fn installed_names(handle: &alpm::Alpm) -> HashSet<String> {
-    handle
-        .localdb()
-        .pkgs()
-        .into_iter()
-        .map(|p| p.name().to_string())
-        .collect()
+fn installed_names(_handle: &alpm::Alpm) -> HashSet<String> {
+    domain::installed_package_names()
 }
 
 static PACMAN_PROGRESS: LazyLock<Regex> =

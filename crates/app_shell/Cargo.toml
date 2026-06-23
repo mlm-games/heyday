@@ -25,7 +25,6 @@ backend_aur = { path = "../backend_aur", optional = true }
 backend_flatpak = { path = "../backend_flatpak", optional = true }
 backend_appimage = { path = "../backend_appimage", optional = true }
 app_ui = { path = "../app_ui" }
-notify.workspace = true
 log.workspace = true
 
 # [package.metadata.android]
