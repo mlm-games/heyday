@@ -2,6 +2,7 @@ use domain::*;
 use parking_lot::Mutex;
 use regex::Regex;
 use std::{
+    cmp::Ordering,
     collections::HashSet,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
@@ -452,7 +453,7 @@ impl PackageBackend for AlpmBackend {
                 if let Ok(sync_pkg) = db.pkg(name) {
                     let sv = sync_pkg.version().as_str().to_string();
                     let better = best.as_ref().map_or(true, |(_, bv, _)| {
-                        alpm::vercmp(bv.as_str(), sv.as_str()) == std::cmp::Ordering::Less
+                        alpm::vercmp(bv.as_str(), sv.as_str()) == Ordering::Less
                     });
                     if better {
                         best = Some((
@@ -465,7 +466,7 @@ impl PackageBackend for AlpmBackend {
             }
             if let Some((repo, version, desc)) = best {
                 let local_v = pkg.version().as_str();
-                if alpm::vercmp(local_v, &version) == std::cmp::Ordering::Less {
+                if alpm::vercmp(local_v, &version) == Ordering::Less {
                     results.push(PackageSummary {
                         id: PackageId {
                             name: name.to_string(),

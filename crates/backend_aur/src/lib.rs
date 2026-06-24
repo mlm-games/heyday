@@ -1,6 +1,7 @@
 use domain::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     fs,
     io::Write,
@@ -41,6 +42,8 @@ pub struct AurPkg {
     depends: Option<Vec<String>>,
     #[serde(rename = "OptDepends")]
     optdepends: Option<Vec<String>>,
+    #[serde(rename = "PackageBase")]
+    package_base: Option<String>,
 }
 
 pub struct AurBackend;
@@ -123,38 +126,166 @@ fn aur_info(names: &[String]) -> Vec<AurPkg> {
     if names.is_empty() {
         return vec![];
     }
-    let mut url = format!("https://aur.archlinux.org/rpc/?v=5&type=info");
-    for n in names {
-        use std::fmt::Write;
-        write!(url, "&arg[]={}", urlencoding::encode(n)).ok();
+    let mut results = Vec::new();
+    for chunk in names.chunks(100) {
+        let mut form: Vec<(&str, &str)> = vec![("v", "5"), ("type", "info")];
+        for n in chunk {
+            form.push(("arg[]", n));
+        }
+        let mut resp = match http()
+            .post("https://aur.archlinux.org/rpc/")
+            .send_form(form)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("AUR info RPC failed: {e}");
+                return results;
+            }
+        };
+        match resp.body_mut().read_json::<AurResponse<AurPkg>>() {
+            Ok(r) => results.extend(r.results),
+            Err(e) => {
+                log::warn!("AUR info RPC parse failed: {e}");
+                return results;
+            }
+        }
     }
-    let mut resp = match http().get(&url).call() {
-        Ok(r) => r,
-        Err(e) => {
-            log::warn!("AUR info RPC failed: {e}");
-            return vec![];
-        }
-    };
-    match resp.body_mut().read_json::<AurResponse<AurPkg>>() {
-        Ok(r) => r.results,
-        Err(e) => {
-            log::warn!("AUR info RPC parse failed: {e}");
-            vec![]
-        }
+    results
+}
+
+fn vercmp(v1: &str, v2: &str) -> Ordering {
+    alpm::vercmp(v1, v2)
+}
+
+fn pkgbase_for(name: &str) -> String {
+    let info = aur_info(&[name.to_string()]);
+    info.first()
+        .and_then(|p| p.package_base.clone())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| name.to_string())
+}
+
+// ── VCS update detection ──────────────────────────────────────────
+
+const VCS_SUFFIXES: &[&str] = &["-git", "-svn", "-hg", "-bzr", "-darcs", "-cvs"];
+
+fn is_vcs(name: &str) -> bool {
+    VCS_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+#[derive(Serialize, Deserialize)]
+struct VcsEntry {
+    url: String,
+    branch: String,
+    commit: String,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct VcsStore {
+    packages: HashMap<String, Vec<VcsEntry>>,
+}
+
+fn vcs_store_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".cache/soredowe/aur-vcs.json")
+}
+
+fn load_vcs_store() -> VcsStore {
+    let path = vcs_store_path();
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_vcs_store(store: &VcsStore) {
+    let path = vcs_store_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(s) = serde_json::to_string_pretty(store) {
+        let _ = fs::write(&path, &s);
     }
 }
 
-fn vercmp(v1: &str, v2: &str) -> std::cmp::Ordering {
-    // vercmp binary prints -1/0/1 to stdout and always exits 0
-    let out = match Command::new("vercmp").args([v1, v2]).output() {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => return std::cmp::Ordering::Equal,
-    };
-    match out.as_str() {
-        "-1" => std::cmp::Ordering::Less,
-        "1" => std::cmp::Ordering::Greater,
-        _ => std::cmp::Ordering::Equal,
+fn fetch_pkgbuild(pkgbase: &str) -> Option<String> {
+    let url = format!("https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h={pkgbase}");
+    let mut resp = http().get(&url).call().ok()?;
+    resp.body_mut().read_to_string().ok()
+}
+
+fn parse_git_sources(pkgbuild: &str) -> Vec<(String, String)> {
+    let mut sources = Vec::new();
+    let mut in_source = false;
+    let mut buf = String::new();
+
+    for line in pkgbuild.lines() {
+        let line = line.trim();
+
+        if !in_source {
+            if let Some(rest) = line.strip_prefix("source=") {
+                let rest = rest.trim();
+                if rest.is_empty() {
+                    continue;
+                }
+                if let Some(inner) = rest.strip_prefix('(') {
+                    buf = inner.to_string();
+                    in_source = true;
+                    if let Some(stripped) = inner.strip_suffix(')') {
+                        buf = stripped.to_string();
+                        in_source = false;
+                    }
+                }
+            }
+        } else if let Some(stripped) = line.strip_suffix(')') {
+            buf.push_str(stripped);
+            in_source = false;
+        } else {
+            buf.push_str(line);
+        }
     }
+
+    for token in buf.split('"') {
+        let token = token.trim();
+        if token.is_empty() || !(token.contains("://") || token.starts_with("git@")) {
+            continue;
+        }
+        let url = if let Some(idx) = token.find("::") {
+            &token[idx + 2..]
+        } else {
+            token
+        };
+        let (url, branch) = if let Some(idx) = url.find('#') {
+            (&url[..idx], Some(&url[idx + 1..]))
+        } else {
+            (url, None)
+        };
+        if url.contains("://") || url.starts_with("git@") {
+            sources.push((url.to_string(), branch.unwrap_or("HEAD").to_string()));
+        }
+    }
+    sources
+}
+
+fn git_ls_remote(url: &str, branch: &str) -> Option<String> {
+    let refspec = if branch == "HEAD" {
+        "HEAD".to_string()
+    } else {
+        format!("refs/heads/{branch}")
+    };
+    let out = Command::new("git")
+        .args(["ls-remote", url, &refspec])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+        .lines()
+        .next()
+        .and_then(|line| line.split('\t').next().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
 }
 
 impl PackageBackend for AurBackend {
@@ -205,24 +336,87 @@ impl PackageBackend for AurBackend {
         let names: Vec<String> = foreign.iter().map(|(n, _)| n.clone()).collect();
         let info = aur_info(&names);
         let mut results = Vec::new();
+        let mut checked = std::collections::HashSet::new();
+
         for p in &info {
-            if let Some((_, installed_ver)) = foreign.iter().find(|(n, _)| n == &p.name) {
-                if vercmp(installed_ver, &p.version) == std::cmp::Ordering::Less {
+            checked.insert(p.name.clone());
+            if let Some((_, installed_ver)) = foreign.iter().find(|(n, _)| n == &p.name)
+                && vercmp(installed_ver, &p.version) == Ordering::Less
+            {
+                results.push(PackageSummary {
+                    id: PackageId {
+                        name: p.name.clone(),
+                        source: Source::Aur,
+                        repo: None,
+                    },
+                    version: p.version.clone(),
+                    description: p.description.clone().unwrap_or_default(),
+                    installed: true,
+                    popular: p.votes,
+                    last_updated: ts(p.last_modified),
+                });
+            }
+        }
+
+        let vcs_pkgs: Vec<_> = foreign
+            .iter()
+            .filter(|(n, _)| is_vcs(n) && !checked.contains(n.as_str()))
+            .collect();
+
+        if !vcs_pkgs.is_empty() {
+            let mut store = load_vcs_store();
+            let mut dirty = false;
+
+            for (name, _installed_ver) in &vcs_pkgs {
+                let pkgbase = pkgbase_for(name);
+                let Some(pkgbuild) = fetch_pkgbuild(&pkgbase) else {
+                    continue;
+                };
+                let sources = parse_git_sources(&pkgbuild);
+                if sources.is_empty() {
+                    continue;
+                }
+                let mut needs_update = false;
+                let mut new_entries = Vec::new();
+                for (url, branch) in &sources {
+                    if let Some(sha) = git_ls_remote(url, branch) {
+                        let stored = store
+                            .packages
+                            .get(name.as_str())
+                            .and_then(|entries| entries.iter().find(|e| e.url == *url));
+                        if let Some(e) = stored && e.commit != sha {
+                            needs_update = true;
+                        }
+                        new_entries.push(VcsEntry {
+                            url: url.clone(),
+                            branch: branch.clone(),
+                            commit: sha,
+                        });
+                    }
+                }
+                if needs_update {
                     results.push(PackageSummary {
                         id: PackageId {
-                            name: p.name.clone(),
+                            name: name.clone(),
                             source: Source::Aur,
                             repo: None,
                         },
-                        version: p.version.clone(),
-                        description: p.description.clone().unwrap_or_default(),
+                        version: "latest-commit".into(),
+                        description: String::new(),
                         installed: true,
-                        popular: p.votes,
-                        last_updated: ts(p.last_modified),
+                        popular: None,
+                        last_updated: None,
                     });
                 }
+                store.packages.insert(name.clone(), new_entries);
+                dirty = true;
+            }
+
+            if dirty {
+                save_vcs_store(&store);
             }
         }
+
         Ok(results)
     }
 
@@ -450,14 +644,16 @@ impl PackageBackend for AurBackend {
             });
         };
 
-        send_log(Stage::Building, &format!("cloning {}.git", id.name), false);
+        let pkgbase = pkgbase_for(&id.name);
+
+        send_log(Stage::Building, &format!("cloning {}.git", pkgbase), false);
 
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
 
         let work = tempfile::tempdir().map_err(|e| Error::Internal(e.to_string()))?;
-        let dir = work.path().join(&id.name);
+        let dir = work.path().join(&pkgbase);
 
         let dir_str = dir
             .to_str()
@@ -467,7 +663,7 @@ impl PackageBackend for AurBackend {
             .args([
                 "clone",
                 "--depth=1",
-                &format!("https://aur.archlinux.org/{}.git", id.name),
+                &format!("https://aur.archlinux.org/{pkgbase}.git"),
                 &dir_str,
             ])
             .status()

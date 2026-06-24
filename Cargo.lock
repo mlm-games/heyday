@@ -585,9 +585,11 @@ dependencies = [
 name = "backend_aur"
 version = "0.4.1"
 dependencies = [
+ "alpm",
  "domain",
  "log",
  "serde",
+ "serde_json",
  "tempfile",
  "ureq",
  "urlencoding",
