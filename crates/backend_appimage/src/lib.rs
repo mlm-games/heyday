@@ -454,8 +454,9 @@ impl PackageBackend for AppImageBackend {
         let mut seen = std::collections::HashSet::new();
         let desk_dir = user_desktop_files_dir();
         let apps_dir = user_apps_dir();
+        let cfg = read_config();
 
-        // Scan desktop files (primary source, like gearlever)
+        // Scan desktop files (primary source, like gearlever, but also with appstream parsing)
         if let Ok(entries) = fs::read_dir(&desk_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -508,6 +509,7 @@ impl PackageBackend for AppImageBackend {
                     .find(|l| l.starts_with("X-AppImage-Version="))
                     .and_then(|l| l.strip_prefix("X-AppImage-Version="))
                     .map(|s| s.trim().to_string())
+                    .or_else(|| cfg.get(&app_name).map(|e| e.version.clone()))
                     .unwrap_or_default();
 
                 let description = content
@@ -533,8 +535,6 @@ impl PackageBackend for AppImageBackend {
             }
         }
 
-        // Fallback: scan Apps directory for unregistered AppImages
-        let cfg = read_config();
         if let Ok(entries) = fs::read_dir(&apps_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -1092,8 +1092,7 @@ fn check_gh_update(
     let mut best_url = String::new();
 
     for asset in &release.assets {
-        let is_appimage =
-            asset.name.ends_with(".AppImage") || asset.name.ends_with(".appimage");
+        let is_appimage = asset.name.ends_with(".AppImage") || asset.name.ends_with(".appimage");
         let matches = if let Some(pat) = pattern {
             if is_appimage && pat.ends_with(".zsync") {
                 fnmatch(&pat[..pat.len() - 6], &asset.name)
