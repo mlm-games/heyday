@@ -39,6 +39,7 @@ jobs:
             'hicolor-icon-theme'
           )
           makedepends=('rustup' 'base-devel')
+          options=('!lto')
           provides=('soredowe')
           conflicts=('soredowe-bin')
           source=("${pkgname}-${pkgver}.tar.gz::https://github.com/mlm-games/soredowe/archive/refs/tags/v${pkgver}.tar.gz")
