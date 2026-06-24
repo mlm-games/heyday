@@ -130,4 +130,4 @@ jobs:
           commit_username: MLM-stuff
           commit_email: gfxoxinzh@mozmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to v${{ inputs.version_name }}"
+          commit_message: "Update to ${{ inputs.version_name }}"

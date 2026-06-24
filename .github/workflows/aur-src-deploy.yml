@@ -1,6 +1,9 @@
 name: Publish source package to AUR
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version_name:
@@ -13,11 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          ver="${{ inputs.version_name || github.ref_name }}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
       - name: Create PKGBUILD
         shell: bash
         run: |
           set -euo pipefail
-          ver="${{ inputs.version_name }}"
+          ver="${{ steps.version.outputs.version }}"
           pkgver="${ver#v}"
           mkdir -p aur-package
           cat > aur-package/PKGBUILD <<'EOF'
@@ -82,4 +92,4 @@ jobs:
           commit_username: MLM-stuff
           commit_email: gfxoxinzh@mozmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to v${{ inputs.version_name }}"
+          commit_message: "Update to ${{ steps.version.outputs.version }}"
