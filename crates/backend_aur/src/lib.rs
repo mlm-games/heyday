@@ -614,7 +614,14 @@ impl PackageBackend for AurBackend {
         self.install(id, sink, cancel)
     }
 
-    fn upgrade_all(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
+    fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+        let updates = self.updates(cancel)?;
+        for pkg in &updates {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            self.install(&pkg.id, sink, cancel)?;
+        }
         Ok(())
     }
 }

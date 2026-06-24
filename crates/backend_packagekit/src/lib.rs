@@ -62,13 +62,13 @@ fn collect(
     let rule = MatchRule::builder()
         .msg_type(Type::Signal)
         .interface("org.freedesktop.PackageKit.Transaction")
-        .map_err(|e| Error::Alpm(e.to_string()))?
+        .map_err(|e| Error::PackageKit(e.to_string()))?
         .path(inner.path())
-        .map_err(|e| Error::Alpm(e.to_string()))?
+        .map_err(|e| Error::PackageKit(e.to_string()))?
         .build();
     let conn = inner.connection();
     let iter = MessageIterator::for_match_rule(rule, conn, None)
-        .map_err(|e| Error::Alpm(e.to_string()))?;
+        .map_err(|e| Error::PackageKit(e.to_string()))?;
 
     let mut details = Vec::new();
     let mut packages = Vec::new();
@@ -77,7 +77,7 @@ fn collect(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let msg = result.map_err(|e| Error::Alpm(e.to_string()))?;
+        let msg = result.map_err(|e| Error::PackageKit(e.to_string()))?;
         let header = msg.header();
         let Some(member) = header.member() else {
             continue;
@@ -87,7 +87,7 @@ fn collect(
                 let map: HashMap<String, OwnedValue> = msg
                     .body()
                     .deserialize()
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
                 let package_id = get_str(&map, "package-id").unwrap_or_default();
                 let summary = get_str(&map, "summary").unwrap_or_default();
                 let description = get_str(&map, "description").unwrap_or_default();
@@ -103,23 +103,23 @@ fn collect(
                 let (code, detail): (u32, String) = msg
                     .body()
                     .deserialize()
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
                 if code != 48 {
-                    return Err(Error::Alpm(format!("{detail} (code {code})")));
+                    return Err(Error::PackageKit(format!("{detail} (code {code})")));
                 }
             }
             "ItemProgress" => {
                 let (_pid, _status, pct): (String, u32, u32) = msg
                     .body()
                     .deserialize()
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
                 on_progress(pct);
             }
             "Package" => {
                 let (info, package_id, summary): (u32, String, String) =
                     msg.body()
                         .deserialize()
-                        .map_err(|e| Error::Alpm(e.to_string()))?;
+                        .map_err(|e| Error::PackageKit(e.to_string()))?;
                 packages.push(PkgInfo {
                     _info: info,
                     package_id,
@@ -134,6 +134,21 @@ fn collect(
     }
 
     Ok((details, packages))
+}
+
+/// Build a closure that sends progress to a ProgressSink.
+fn send_progress(sink: &ProgressSink, stage: Stage) -> impl FnMut(u32) + '_ {
+    let sink = (*sink).clone();
+    move |pct| {
+        let _ = sink.send(Progress {
+            job_id: 0,
+            stage,
+            percent: Some(pct as f32 / 100.0),
+            bytes: None,
+            log: None,
+            warning: false,
+        });
+    }
 }
 
 pub struct PackageKitBackend {
@@ -151,20 +166,14 @@ impl PackageKitBackend {
             .map_err(|e| Error::Internal(e.to_string()))?;
         let path = pk
             .create_transaction()
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         TransactionProxyBlocking::builder(&self.connection)
             .destination("org.freedesktop.PackageKit")
             .map_err(|e| Error::Internal(e.to_string()))?
             .path(path)
             .map_err(|e| Error::Internal(e.to_string()))?
             .build()
-            .map_err(|e| Error::Alpm(e.to_string()))
-    }
-
-    fn run_silent(&self, cancel: &CancelToken) -> Result<()> {
-        let txn = self.txn()?;
-        collect(txn, cancel, &mut |_| {})?;
-        Ok(())
+            .map_err(|e| Error::PackageKit(e.to_string()))
     }
 }
 
@@ -173,28 +182,28 @@ impl PackageBackend for PackageKitBackend {
         "packagekit"
     }
 
-    fn refresh(&self, _sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
+    fn refresh(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         txn.refresh_cache(false)
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        self.run_silent(cancel)
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        Ok(())
     }
 
     fn search(
         &self,
         q: &str,
-        _sink: &ProgressSink,
+        sink: &ProgressSink,
         cancel: &CancelToken,
     ) -> Result<Vec<PackageSummary>> {
         let txn = self.txn()?;
         let filter = (Filter::Newest as u64) | (Filter::Arch as u64);
 
         txn.resolve(filter, &[q])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
 
-        let (_details, packages) = collect(txn, cancel, &mut |_| {})?;
+        let (_details, packages) = collect(txn, cancel, &mut send_progress(sink, Stage::Searching))?;
 
         let mut results: Vec<PackageSummary> = packages
             .into_iter()
@@ -222,17 +231,17 @@ impl PackageBackend for PackageKitBackend {
     fn details(
         &self,
         id: &PackageId,
-        _sink: &ProgressSink,
+        sink: &ProgressSink,
         cancel: &CancelToken,
     ) -> Result<PackageDetails> {
         let txn = self.txn()?;
         txn.resolve(Filter::Newest as u64 | Filter::Arch as u64, &[&id.name])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        let (_details, packages) = collect(txn, cancel, &mut |_| {})?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        let (_details, packages) = collect(txn, cancel, &mut send_progress(sink, Stage::Searching))?;
 
         let first_pkg = packages
             .first()
-            .ok_or_else(|| Error::Alpm(format!("{} not found", id.name)))?;
+            .ok_or_else(|| Error::PackageKit(format!("{} not found", id.name)))?;
         let (_name, version) = parse_pkg_id(&first_pkg.package_id);
 
         Ok(PackageDetails {
@@ -259,7 +268,7 @@ impl PackageBackend for PackageKitBackend {
     fn installed(&self, cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
         let txn = self.txn()?;
         txn.get_packages(Filter::Installed as u64)
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         let (_details, packages) = collect(txn, cancel, &mut |_| {})?;
 
         Ok(packages
@@ -285,7 +294,7 @@ impl PackageBackend for PackageKitBackend {
     fn updates(&self, cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
         let txn = self.txn()?;
         txn.get_updates(Filter::None as u64)
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         let (_details, packages) = collect(txn, cancel, &mut |_| {})?;
 
         let mut results: Vec<PackageSummary> = packages
@@ -327,49 +336,43 @@ impl PackageBackend for PackageKitBackend {
             _ => (Filter::NotInstalled as u64) | (Filter::Newest as u64) | (Filter::Arch as u64),
         };
         txn.resolve(filter, &package_ids)
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        let (_detail, resolved) = collect(txn, cancel, &mut |_| {})?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        let (_detail, resolved) = collect(txn, cancel, &mut send_progress(sink, Stage::Resolving))?;
         let resolved_ids: Vec<String> = resolved.into_iter().map(|p| p.package_id).collect();
         let refs: Vec<&str> = resolved_ids.iter().map(|s| s.as_str()).collect();
 
         if refs.is_empty() {
-            return Err(Error::Alpm("no packages resolved".into()));
+            return Err(Error::PackageKit("no packages resolved".into()));
         }
 
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
 
-        match &op.kind {
+        let op_stage = match &op.kind {
             OperationKind::Install => {
                 txn.install_packages(TxnFlag::OnlyTrusted as u64, &refs)
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
+                Stage::Installing
             }
-            OperationKind::Remove { purge_data: _ } => {
+            OperationKind::Remove { .. } => {
                 txn.remove_packages(0, &refs, true, true)
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
+                Stage::Removing
             }
             OperationKind::Update => {
                 txn.update_packages(TxnFlag::OnlyTrusted as u64, &refs)
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
+                Stage::Installing
             }
             OperationKind::Refresh => {
                 txn.refresh_cache(false)
-                    .map_err(|e| Error::Alpm(e.to_string()))?;
+                    .map_err(|e| Error::PackageKit(e.to_string()))?;
+                Stage::Refreshing
             }
-        }
+        };
 
-        let mut pct: u32 = 0;
-        let _ = collect(txn, cancel, &mut |x| pct = x)?;
-
-        let _ = sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Installing,
-            percent: Some(pct as f32 / 100.0),
-            bytes: None,
-            log: None,
-            warning: false,
-        });
+        let _ = collect(txn, cancel, &mut send_progress(sink, op_stage))?;
 
         Ok(())
     }
@@ -377,57 +380,30 @@ impl PackageBackend for PackageKitBackend {
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         txn.install_packages(TxnFlag::OnlyTrusted as u64, &[&id.name])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        let mut pct: u32 = 0;
-        let _ = collect(txn, cancel, &mut |x| pct = x)?;
-        let _ = sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Installing,
-            percent: Some(pct as f32 / 100.0),
-            bytes: None,
-            log: None,
-            warning: false,
-        });
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        let _ = collect(txn, cancel, &mut send_progress(sink, Stage::Installing))?;
         Ok(())
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         txn.remove_packages(0, &[&id.name], true, true)
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        let mut pct: u32 = 0;
-        let _ = collect(txn, cancel, &mut |x| pct = x)?;
-        let _ = sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Removing,
-            percent: Some(pct as f32 / 100.0),
-            bytes: None,
-            log: None,
-            warning: false,
-        });
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        let _ = collect(txn, cancel, &mut send_progress(sink, Stage::Removing))?;
         Ok(())
     }
 
     fn upgrade(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         txn.update_packages(TxnFlag::OnlyTrusted as u64, &[&id.name])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        let mut pct: u32 = 0;
-        let _ = collect(txn, cancel, &mut |x| pct = x)?;
-        let _ = sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Installing,
-            percent: Some(pct as f32 / 100.0),
-            bytes: None,
-            log: None,
-            warning: false,
-        });
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        let _ = collect(txn, cancel, &mut send_progress(sink, Stage::Installing))?;
         Ok(())
     }
 
@@ -439,20 +415,11 @@ impl PackageBackend for PackageKitBackend {
 
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])
-            .map_err(|e| Error::Alpm(e.to_string()))?;
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
         let names: Vec<&str> = updates.iter().map(|u| u.id.name.as_str()).collect();
         txn.update_packages(TxnFlag::OnlyTrusted as u64, &names)
-            .map_err(|e| Error::Alpm(e.to_string()))?;
-        let mut pct: u32 = 0;
-        let _ = collect(txn, cancel, &mut |x| pct = x)?;
-        let _ = sink.send(Progress {
-            job_id: 0,
-            stage: Stage::Installing,
-            percent: Some(pct as f32 / 100.0),
-            bytes: None,
-            log: None,
-            warning: false,
-        });
+            .map_err(|e| Error::PackageKit(e.to_string()))?;
+        let _ = collect(txn, cancel, &mut send_progress(sink, Stage::Installing))?;
         Ok(())
     }
 }

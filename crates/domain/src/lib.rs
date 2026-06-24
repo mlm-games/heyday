@@ -103,6 +103,8 @@ pub enum Error {
     Aur(String),
     #[error("flatpak: {0}")]
     Flatpak(String),
+    #[error("packagekit: {0}")]
+    PackageKit(String),
     #[error("appimage: {0}")]
     AppImage(String),
     #[error("privilege: {0}")]

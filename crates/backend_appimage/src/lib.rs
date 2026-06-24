@@ -1053,12 +1053,17 @@ fn fnmatch(pattern: &str, name: &str) -> bool {
     pi == plen
 }
 
-fn extract_json_str<'a>(obj: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("\"{key}\":\"");
-    let start = obj.find(&needle)?;
-    let rest = &obj[start + needle.len()..];
-    let end = rest.find('"')?;
-    Some(&rest[..end])
+#[derive(Deserialize)]
+struct GhAsset {
+    name: String,
+    size: u64,
+    browser_download_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    assets: Vec<GhAsset>,
 }
 
 fn check_gh_update(
@@ -1071,7 +1076,7 @@ fn check_gh_update(
         return None;
     }
 
-    let mut resp = agent
+    let resp = agent
         .get(url)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "soredowe/0.4.0")
@@ -1080,93 +1085,33 @@ fn check_gh_update(
     if resp.status() != 200 {
         return None;
     }
-    let body = resp.body_mut().read_to_string().ok()?;
-
-    let tag = extract_json_str(&body, "tag_name")?.to_string();
-
-    let assets_key = "\"assets\":[";
-    let assets_start = body.find(assets_key)?;
-    let assets_rest = &body[assets_start + assets_key.len()..];
-
-    let mut depth = 1u32;
-    let mut i = 0;
-    let bytes = assets_rest.as_bytes();
-    while i < bytes.len() && depth > 0 {
-        match bytes[i] {
-            b'{' | b'[' => depth += 1,
-            b'}' | b']' => depth -= 1,
-            _ => {}
-        }
-        i += 1;
-    }
-    let assets_json = &assets_rest[..i];
+    let release: GhRelease = resp.into_body().read_json().ok()?;
 
     let name_lower = name.to_lowercase();
     let mut best_size = 0u64;
     let mut best_url = String::new();
 
-    let mut pos = 0;
-    let ba = assets_json.as_bytes();
-    while pos < ba.len() {
-        if ba[pos] == b'{' {
-            let mut br = 1u32;
-            let mut end = pos + 1;
-            while end < ba.len() && br > 0 {
-                if ba[end] == b'{' {
-                    br += 1;
-                } else if ba[end] == b'}' {
-                    br -= 1;
-                }
-                end += 1;
+    for asset in &release.assets {
+        let is_appimage =
+            asset.name.ends_with(".AppImage") || asset.name.ends_with(".appimage");
+        let matches = if let Some(pat) = pattern {
+            if is_appimage && pat.ends_with(".zsync") {
+                fnmatch(&pat[..pat.len() - 6], &asset.name)
+            } else {
+                fnmatch(pat, &asset.name)
             }
-            let obj_str = std::str::from_utf8(&ba[pos..end]).ok()?;
-
-            if let Some(asset_name) = extract_json_str(obj_str, "name") {
-                let is_appimage =
-                    asset_name.ends_with(".AppImage") || asset_name.ends_with(".appimage");
-                let matches = if let Some(pat) = pattern {
-                    if is_appimage && pat.ends_with(".zsync") {
-                        fnmatch(&pat[..pat.len() - 6], asset_name)
-                    } else {
-                        fnmatch(pat, asset_name)
-                    }
-                } else {
-                    let asset_lower = asset_name.to_lowercase();
-                    is_appimage && asset_lower.contains(&name_lower)
-                };
-                if matches {
-                    let dk = "\"browser_download_url\":\"";
-                    let url_val = obj_str
-                        .find(dk)
-                        .and_then(|ds| {
-                            let d_rest = &obj_str[ds + dk.len()..];
-                            let d_end = d_rest.find('"')?;
-                            Some(&d_rest[..d_end])
-                        })
-                        .unwrap_or("");
-                    let sk = "\"size\":";
-                    let size_val = obj_str
-                        .find(sk)
-                        .and_then(|ss| {
-                            let s_rest = &obj_str[ss + sk.len()..];
-                            let s_end = s_rest.find(|c: char| !c.is_ascii_digit())?;
-                            s_rest[..s_end].parse::<u64>().ok()
-                        })
-                        .unwrap_or(0);
-                    if size_val > best_size {
-                        best_size = size_val;
-                        best_url = url_val.to_string();
-                    }
-                }
-            }
-            pos = end;
         } else {
-            pos += 1;
+            let asset_lower = asset.name.to_lowercase();
+            is_appimage && asset_lower.contains(&name_lower)
+        };
+        if matches && asset.size > best_size {
+            best_size = asset.size;
+            best_url = asset.browser_download_url.clone();
         }
     }
 
-    if best_size > 0 && !best_url.is_empty() {
-        Some((tag, best_size, best_url))
+    if best_size > 0 {
+        Some((release.tag_name, best_size, best_url))
     } else {
         None
     }

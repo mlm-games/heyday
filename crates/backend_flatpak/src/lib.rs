@@ -142,9 +142,12 @@ impl FlatpakBackend {
         })
     }
 
-    fn name_to_ref(name: &str) -> String {
+    /// Construct a flatpak ref string.
+    /// If `branch` is empty, defaults to `"stable"`.
+    fn name_to_ref(name: &str, branch: &str) -> String {
         let arch = std::env::consts::ARCH;
-        format!("app/{name}/{arch}/stable")
+        let br = if branch.is_empty() { "stable" } else { branch };
+        format!("app/{name}/{arch}/{br}")
     }
 
     fn with_transaction_on(
@@ -456,15 +459,22 @@ impl PackageBackend for FlatpakBackend {
     }
 
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        let remote = id.repo.as_deref().unwrap_or("flathub");
-        let ref_str = Self::name_to_ref(&id.name);
+        let (remote, branch) = id
+            .repo
+            .as_deref()
+            .map(|r| match r.split_once(':') {
+                Some((rem, br)) => (rem.to_string(), br.to_string()),
+                None => (r.to_string(), String::new()),
+            })
+            .unwrap_or_else(|| ("flathub".to_string(), String::new()));
+        let ref_str = Self::name_to_ref(&id.name, &branch);
         // Install to the first available installation (user-preferred)
         let user = *self.user_modes.first().unwrap_or(&true);
         self.with_transaction_on(
             user,
             Stage::Installing,
             |tx: &Transaction| {
-                tx.add_install(remote, &ref_str, &[])?;
+                tx.add_install(&remote, &ref_str, &[])?;
                 Ok(())
             },
             sink,
