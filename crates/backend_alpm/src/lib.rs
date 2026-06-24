@@ -1,4 +1,3 @@
-use alpm::SigLevel;
 use domain::*;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -39,7 +38,10 @@ impl AlpmBackend {
 
         let names = pacman_conf_repos();
         for name in &names {
-            let _ = h.register_syncdb(name.as_str(), SigLevel::NONE);
+            let _ = h.register_syncdb(
+                name.as_str(),
+                alpm::SigLevel::PACKAGE_OPTIONAL | alpm::SigLevel::DATABASE_OPTIONAL,
+            );
         }
         *guard = Some(h);
         Ok(())
@@ -138,17 +140,25 @@ fn run_stream(
                 let mut g = last_err_t2.lock();
                 *g = Some(l.clone());
             }
-            let (stage, _pct) = parse_pacman_progress(&l)
-                .map(|(cur, total, stage)| (stage, Some(cur as f32 / total as f32)))
-                .unwrap_or((default_stage, None));
-            let _ = tx2.send(Progress {
-                job_id: 0,
-                stage,
-                percent: None,
-                bytes: None,
-                log: Some(l),
-                warning: true,
-            });
+            if let Some((cur, total, stage)) = parse_pacman_progress(&l) {
+                let _ = tx2.send(Progress {
+                    job_id: 0,
+                    stage,
+                    percent: Some(cur as f32 / total as f32),
+                    bytes: None,
+                    log: Some(l),
+                    warning: false,
+                });
+            } else {
+                let _ = tx2.send(Progress {
+                    job_id: 0,
+                    stage: default_stage,
+                    percent: None,
+                    bytes: None,
+                    log: Some(l),
+                    warning: true,
+                });
+            }
         }
     });
 
@@ -202,6 +212,26 @@ fn pkexec_pacman(
     let mut cmd = Command::new("pkexec");
     cmd.arg("pacman");
     cmd.args(args);
+    let (code, last_err) = run_stream(cmd, sink, cancel, stage)?;
+    if code == 0 {
+        Ok(())
+    } else {
+        let why = last_err.map(|e| format!(": {e}")).unwrap_or_default();
+        Err(Error::Priv(format!("pacman exit {code}{why}")))
+    }
+}
+
+fn pkexec_pacman_args(
+    args: &[&str],
+    pkgs: Vec<String>,
+    sink: &ProgressSink,
+    cancel: &CancelToken,
+    stage: Stage,
+) -> Result<()> {
+    let mut cmd = Command::new("pkexec");
+    cmd.arg("pacman");
+    cmd.args(args);
+    cmd.args(&pkgs);
     let (code, last_err) = run_stream(cmd, sink, cancel, stage)?;
     if code == 0 {
         Ok(())
@@ -362,7 +392,7 @@ impl PackageBackend for AlpmBackend {
                         .filter(|s| !s.is_empty())
                         .collect(),
                     homepage: pkg.url().map(|s| s.to_string()),
-                    license: None,
+                    license: pkg.licenses().first().map(|s| s.to_string()),
                     maintainer: pkg.packager().map(|s| s.to_string()),
                     developer: None,
                     size_install: Some(pkg.isize() as u64),
@@ -381,6 +411,8 @@ impl PackageBackend for AlpmBackend {
     }
 
     fn installed(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        // Re-init handle for fresh localdb after external pkexec operations
+        *self.handle.lock() = None;
         self.ensure()?;
         let guard = self.handle.lock();
         let handle = guard.as_ref().expect("alpm handle");
@@ -404,6 +436,8 @@ impl PackageBackend for AlpmBackend {
     }
 
     fn updates(&self, _cancel: &CancelToken) -> Result<Vec<PackageSummary>> {
+        // Re-init handle for fresh localdb after external pkexec operations
+        *self.handle.lock() = None;
         self.ensure()?;
 
         let guard = self.handle.lock();
@@ -413,25 +447,37 @@ impl PackageBackend for AlpmBackend {
 
         for pkg in local.pkgs() {
             let name = pkg.name();
+            let mut best: Option<(String, String, String)> = None;
             for db in handle.syncdbs() {
                 if let Ok(sync_pkg) = db.pkg(name) {
-                    if alpm::vercmp(pkg.version().as_str(), sync_pkg.version().as_str())
-                        == std::cmp::Ordering::Less
-                    {
-                        results.push(PackageSummary {
-                            id: PackageId {
-                                name: name.to_string(),
-                                source: Source::Repo,
-                                repo: Some(db.name().to_string()),
-                            },
-                            version: sync_pkg.version().as_str().to_string(),
-                            description: sync_pkg.desc().unwrap_or("").to_string(),
-                            installed: true,
-                            popular: None,
-                            last_updated: None,
-                        });
+                    let sv = sync_pkg.version().as_str().to_string();
+                    let better = best.as_ref().map_or(true, |(_, bv, _)| {
+                        alpm::vercmp(bv.as_str(), sv.as_str()) == std::cmp::Ordering::Less
+                    });
+                    if better {
+                        best = Some((
+                            db.name().to_string(),
+                            sv,
+                            sync_pkg.desc().unwrap_or("").to_string(),
+                        ));
                     }
-                    break;
+                }
+            }
+            if let Some((repo, version, desc)) = best {
+                let local_v = pkg.version().as_str();
+                if alpm::vercmp(local_v, &version) == std::cmp::Ordering::Less {
+                    results.push(PackageSummary {
+                        id: PackageId {
+                            name: name.to_string(),
+                            source: Source::Repo,
+                            repo: Some(repo),
+                        },
+                        version,
+                        description: desc,
+                        installed: true,
+                        popular: None,
+                        last_updated: None,
+                    });
                 }
             }
         }
@@ -483,22 +529,61 @@ impl PackageBackend for AlpmBackend {
     ) -> Result<()> {
         match op.kind {
             OperationKind::Install => {
-                for id in &op.package_ids {
-                    self.install(id, sink, cancel)?;
+                let pkgs: Vec<String> = op
+                    .package_ids
+                    .iter()
+                    .map(|id| {
+                        id.repo
+                            .as_ref()
+                            .map(|r| format!("{r}/{}", id.name))
+                            .unwrap_or_else(|| id.name.clone())
+                    })
+                    .collect();
+                if pkgs.is_empty() {
+                    return Err(Error::Internal("no packages".into()));
                 }
-                Ok(())
+                pkexec_pacman_args(
+                    &["-S", "--noconfirm", "--needed"],
+                    pkgs,
+                    sink,
+                    cancel,
+                    Stage::Installing,
+                )
             }
             OperationKind::Remove { .. } => {
-                for id in &op.package_ids {
-                    self.remove(id, sink, cancel)?;
+                let pkgs: Vec<String> = op.package_ids.iter().map(|id| id.name.clone()).collect();
+                if pkgs.is_empty() {
+                    return Err(Error::Internal("no packages".into()));
                 }
-                Ok(())
+                pkexec_pacman_args(
+                    &["-Rns", "--noconfirm"],
+                    pkgs,
+                    sink,
+                    cancel,
+                    Stage::Removing,
+                )
             }
             OperationKind::Update => {
-                for id in &op.package_ids {
-                    self.upgrade(id, sink, cancel)?;
+                let pkgs: Vec<String> = op
+                    .package_ids
+                    .iter()
+                    .map(|id| {
+                        id.repo
+                            .as_ref()
+                            .map(|r| format!("{r}/{}", id.name))
+                            .unwrap_or_else(|| id.name.clone())
+                    })
+                    .collect();
+                if pkgs.is_empty() {
+                    return Err(Error::Internal("no packages".into()));
                 }
-                Ok(())
+                pkexec_pacman_args(
+                    &["-S", "--noconfirm"],
+                    pkgs,
+                    sink,
+                    cancel,
+                    Stage::Installing,
+                )
             }
             OperationKind::Refresh => self.refresh(sink, cancel),
         }

@@ -577,6 +577,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "tempfile",
  "ureq",
 ]
 
@@ -585,6 +586,7 @@ name = "backend_aur"
 version = "0.4.0"
 dependencies = [
  "domain",
+ "log",
  "serde",
  "tempfile",
  "ureq",

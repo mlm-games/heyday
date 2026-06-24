@@ -9,3 +9,4 @@ ureq.workspace = true
 serde.workspace = true
 urlencoding.workspace = true
 tempfile.workspace = true
+log.workspace = true

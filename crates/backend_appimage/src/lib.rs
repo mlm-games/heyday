@@ -101,12 +101,14 @@ fn try_extract_7z(appimage: &str, tmpdir: &str, bin: &str) -> Option<std::proces
 }
 
 fn extract_metainfo(appimage: &str) -> Option<domain::appstream::AppstreamMeta> {
+    let work = tempfile::tempdir().ok()?;
+    let out_dir = work.path().to_str()?;
     for bin in &["7zz", "7z"] {
         let output = std::process::Command::new(bin)
             .args([
                 "x",
                 appimage,
-                "-o/tmp/soredowe-metainfo",
+                &format!("-o{out_dir}"),
                 "-ir!usr/share/metainfo/",
                 "-ir!usr/share/appdata/",
                 "-y",
@@ -120,13 +122,11 @@ fn extract_metainfo(appimage: &str) -> Option<domain::appstream::AppstreamMeta> 
         }
     }
 
-    let dir = Path::new("/tmp/soredowe-metainfo");
-    let found = find_metainfo_files(dir).into_iter().find_map(|p| {
+    let found = find_metainfo_files(work.path()).into_iter().find_map(|p| {
         let file = fs::File::open(&p).ok()?;
         let map = domain::appstream::parse_appstream_xml(file);
         map.into_values().next()
     });
-    let _ = fs::remove_dir_all(dir);
     found
 }
 
@@ -148,8 +148,8 @@ fn find_metainfo_files(dir: &Path) -> Vec<std::path::PathBuf> {
 }
 
 fn extract_desktop_entry(appimage: &str) -> Option<(String, String)> {
-    let tmpdir = format!("/tmp/soredowe-ae");
-    let _ = fs::create_dir_all(&tmpdir);
+    let work = tempfile::tempdir().ok()?;
+    let tmpdir = work.path().to_str()?.to_string();
 
     // 7zz (full 7-Zip) and 7z (p7zip) both support Zstd needed for AppImage.
     // 7za (standalone p7zip) does NOT support Zstd — skip it.
@@ -182,7 +182,6 @@ fn extract_desktop_entry(appimage: &str) -> Option<(String, String)> {
         .is_some();
 
     if !ok {
-        let _ = fs::remove_dir_all(&tmpdir);
         return None;
     }
 
@@ -190,7 +189,7 @@ fn extract_desktop_entry(appimage: &str) -> Option<(String, String)> {
     let search_dir = if Path::new(&format!("{tmpdir}/squashfs-root")).exists() {
         format!("{tmpdir}/squashfs-root")
     } else {
-        tmpdir.clone()
+        tmpdir
     };
 
     let desktop_path = find_desktop_file(Path::new(&search_dir))?;
@@ -203,11 +202,9 @@ fn extract_desktop_entry(appimage: &str) -> Option<(String, String)> {
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     if app_name.is_empty() {
-        let _ = fs::remove_dir_all(&tmpdir);
         return None;
     }
 
-    let _ = fs::remove_dir_all(&tmpdir);
     Some((app_name, content))
 }
 
@@ -748,6 +745,10 @@ impl PackageBackend for AppImageBackend {
         );
         write_config(&cfg);
 
+        let _ = std::process::Command::new("update-desktop-database")
+            .args([&user_desktop_files_dir(), "-q"])
+            .output();
+
         Ok(())
     }
 
@@ -887,10 +888,118 @@ impl PackageBackend for AppImageBackend {
             .or_else(|| id.repo.clone())
             .ok_or_else(|| Error::AppImage("no update URL".into()))?;
 
-        let mut new_id = id.clone();
-        new_id.repo = Some(url);
-        self.remove(id, sink, cancel)?;
-        self.install(&new_id, sink, cancel)
+        let dir = user_apps_dir();
+        let _ = fs::create_dir_all(&dir);
+        let dest = format!("{dir}/{}.AppImage", id.name);
+        let tmp = format!("{dir}/.{}.AppImage.new", id.name);
+
+        let agent = ureq::Agent::new_with_defaults();
+        let resp = agent
+            .get(&url)
+            .call()
+            .map_err(|e: ureq::Error| Error::AppImage(format!("download failed: {e}")))?;
+        let total = resp.body().content_length().unwrap_or(0);
+
+        let mut reader = resp.into_body().into_reader();
+        let mut file = File::create(&tmp).map_err(|e| Error::AppImage(e.to_string()))?;
+        let mut buf = [0u8; 65536];
+        let mut downloaded = 0u64;
+
+        loop {
+            if cancel.is_cancelled() {
+                let _ = fs::remove_file(&tmp);
+                return Err(Error::Cancelled);
+            }
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| Error::AppImage(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])
+                .map_err(|e| Error::AppImage(e.to_string()))?;
+            downloaded += n as u64;
+            if total > 0 {
+                let pct = downloaded as f32 / total as f32;
+                let _ = sink.send(Progress {
+                    job_id: 0,
+                    stage: Stage::Downloading,
+                    percent: Some(pct),
+                    bytes: Some((downloaded, total)),
+                    log: None,
+                    warning: false,
+                });
+            }
+        }
+        drop(file);
+
+        // Remove old before replacing
+        let old_path = cfg.get(&id.name).map(|e| e.path.clone());
+        if let Some(ref old) = old_path {
+            let _ = fs::remove_file(old);
+        }
+        let desktop_path = cfg
+            .get(&id.name)
+            .and_then(|e| e.desktop_file.as_deref())
+            .map(|s| s.to_string());
+        if let Some(ref dp) = desktop_path {
+            let _ = fs::remove_file(dp);
+        }
+
+        fs::rename(&tmp, &dest).map_err(|e| Error::AppImage(e.to_string()))?;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o755))
+            .map_err(|e| Error::AppImage(e.to_string()))?;
+
+        let local_size = fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        let (app_name, version, desktop_file) =
+            if let Some((an, body)) = extract_desktop_entry(&dest) {
+                let ver = body
+                    .lines()
+                    .find(|l| l.starts_with("X-AppImage-Version="))
+                    .and_then(|l| l.strip_prefix("X-AppImage-Version="))
+                    .map(|s| s.trim().to_string());
+                let df = write_desktop_file(&body, &dest, &an, ver.as_deref());
+                (an, ver, df)
+            } else {
+                (id.name.clone(), None, None)
+            };
+
+        let (upd_api_url, upd_pattern) = extract_upd_info(&dest).unzip();
+        let meta = extract_metainfo(&dest);
+        let ver = version.or_else(|| meta.as_ref().and_then(|m| m.version.clone()));
+
+        let mut cfg = read_config();
+        cfg.remove(&id.name);
+        cfg.insert(
+            app_name.clone(),
+            AppImageEntry {
+                path: dest,
+                version: ver.unwrap_or_default(),
+                name: app_name,
+                desktop_file,
+                download_url: Some(url),
+                update_url: upd_api_url,
+                update_pattern: upd_pattern,
+                local_size,
+                license: meta.as_ref().and_then(|m| m.license.clone()),
+                developer: meta.as_ref().and_then(|m| m.developer.clone()),
+                homepage: meta.as_ref().and_then(|m| m.homepage.clone()),
+                long_description: meta.as_ref().and_then(|m| {
+                    if m.description.is_empty() {
+                        None
+                    } else {
+                        Some(m.description.clone())
+                    }
+                }),
+            },
+        );
+        write_config(&cfg);
+
+        let _ = std::process::Command::new("update-desktop-database")
+            .args([&user_desktop_files_dir(), "-q"])
+            .output();
+
+        Ok(())
     }
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -983,10 +1092,10 @@ fn check_gh_update(
     let mut i = 0;
     let bytes = assets_rest.as_bytes();
     while i < bytes.len() && depth > 0 {
-        if bytes[i] == b'{' {
-            depth += 1;
-        } else if bytes[i] == b'}' {
-            depth -= 1;
+        match bytes[i] {
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            _ => {}
         }
         i += 1;
     }
