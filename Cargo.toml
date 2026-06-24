@@ -40,19 +40,19 @@ repose-ui = "0.19.0"
 repose-core = "0.19.0"
 repose-platform = { version = "0.19.0" }
 repose-material = "0.19.0"
-repose-navigation = { path = "../repose/crates/repose-navigation" }
+repose-navigation = "0.19.0"
 colorhash = "0.1"
 bigcolor = "1.2"
 rfd = "0.15"
 shlex = "2"
 
 
-[patch.crates-io]
-repose-core = { path = "../repose/crates/repose-core" }
-repose-ui = { path = "../repose/crates/repose-ui" }
-repose-platform = { path = "../repose/crates/repose-platform" }
-repose-material = { path = "../repose/crates/repose-material" }
-
+# [patch.crates-io]
+# repose-core = { path = "../repose/crates/repose-core" }
+# repose-ui = { path = "../repose/crates/repose-ui" }
+# repose-platform = { path = "../repose/crates/repose-platform" }
+# repose-material = { path = "../repose/crates/repose-material" }
+# repose-navigation = { path = "../repose/crates/repose-navigation" }
 
 
 [profile.release]
