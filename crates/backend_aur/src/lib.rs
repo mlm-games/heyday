@@ -384,7 +384,9 @@ impl PackageBackend for AurBackend {
                             .packages
                             .get(name.as_str())
                             .and_then(|entries| entries.iter().find(|e| e.url == *url));
-                        if let Some(e) = stored && e.commit != sha {
+                        if let Some(e) = stored
+                            && e.commit != sha
+                        {
                             needs_update = true;
                         }
                         new_entries.push(VcsEntry {
@@ -695,36 +697,46 @@ impl PackageBackend for AurBackend {
             return Err(Error::Cancelled);
         }
 
-        // Preinstall repo deps best-effort
+        // Use pacman -T to check what's missing without requiring root
         let srcinfo = String::from_utf8_lossy(&out.stdout);
-        let deps = parse_srcinfo_deps(&srcinfo);
-        if !deps.is_empty() {
+        let all_deps = parse_srcinfo_deps(&srcinfo);
+        let missing: Vec<&String> = all_deps
+            .iter()
+            .filter(|d| {
+                Command::new("pacman")
+                    .args(["-T", d])
+                    .output()
+                    .ok()
+                    .is_none_or(|o| !o.status.success())
+            })
+            .collect();
+        if !missing.is_empty() {
             send_log(
                 Stage::Resolving,
-                &format!("preinstalling deps: {}", deps.join(", ")),
+                &format!(
+                    "installing deps: {}",
+                    missing
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 false,
             );
             let dep_status = Command::new("pkexec")
                 .args(["pacman", "-S", "--noconfirm", "--needed"])
-                .args(deps.iter().map(|s| s.as_str()))
+                .args(missing.iter().map(|s| s.as_str()))
                 .status();
             match dep_status {
                 Ok(s) if !s.success() => {
                     send_log(
                         Stage::Resolving,
-                        &format!(
-                            "preinstall deps exited with code {}",
-                            s.code().unwrap_or(-1)
-                        ),
+                        &format!("dep install exited with code {}", s.code().unwrap_or(-1)),
                         true,
                     );
                 }
                 Err(e) => {
-                    send_log(
-                        Stage::Resolving,
-                        &format!("preinstall deps failed: {e}"),
-                        true,
-                    );
+                    send_log(Stage::Resolving, &format!("dep install failed: {e}"), true);
                 }
                 _ => {}
             }
@@ -741,7 +753,7 @@ impl PackageBackend for AurBackend {
         );
 
         let status = Command::new("makepkg")
-            .args(["-s", "--noconfirm"])
+            .args(["--noconfirm"])
             .current_dir(&dir)
             .status()
             .map_err(|e| Error::Internal(e.to_string()))?;
