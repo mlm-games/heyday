@@ -80,6 +80,7 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
                 let store = store.clone();
                 move || store.dispatch(Action::Upgrades)
             }),
+            Space(Modifier::new().width(16.0)),
         ],
         TopAppBarConfig {
             colors: TopAppBarColors {
