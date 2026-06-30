@@ -582,6 +582,7 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
             ListItem(
                 label,
                 Some(desc.into()),
+                None,
                 Some(badge),
                 Some(Switch(
                     enabled,
@@ -607,6 +608,7 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
                         })
                     }
                 })),
+                None,
                 ListItemConfig {
                     shape_radius: R_MD,
                     ..Default::default()
