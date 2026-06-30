@@ -4,8 +4,11 @@ use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
 use repose_material::material3::{
-    IconButton, IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig, ListItem,
-    ListItemConfig, Surface, SurfaceConfig, Switch, SwitchConfig,
+    Card, CardConfig, CenterAlignedTopAppBar, ChipColors, ChipConfig, FilterChip, HorizontalDivider,
+    DividerConfig, IconButton, IconButtonConfig, LinearProgressIndicator,
+    LinearProgressIndicatorConfig, ListItem, ListItemConfig, Segment, SegmentedButton,
+    SegmentedButtonConfig, Surface, SurfaceConfig, Switch, SwitchConfig, TopAppBarColors,
+    TopAppBarConfig,
 };
 use repose_material::{Icon, material_symbols};
 
@@ -38,49 +41,49 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
         "Soredowe"
     };
 
-    Row(Modifier::new()
-        .fill_max_width()
-        .padding_values(PaddingValues {
-            left: 16.0,
-            right: 16.0,
-            top: 12.0,
-            bottom: 12.0,
-        }))
-    .child(vec![
-        Text(title)
-            .size(FONT_2XL)
-            .color(Color::from_hex(TEXT_PRIMARY))
-            .modifier(Modifier::new().align_self_center()),
-        Spacer(),
-        if s.in_upgrades_view && !s.results.is_empty() {
-            success_button("Upgrade all", {
+    CenterAlignedTopAppBar(
+        Text(title).size(FONT_2XL).color(Color::from_hex(TEXT_PRIMARY)),
+        None,
+        None,
+        vec![
+            if s.in_upgrades_view && !s.results.is_empty() {
+                success_button("Upgrade all", {
+                    let store = store.clone();
+                    move || store.dispatch(Action::UpgradeAll)
+                })
+            } else {
+                Box(Modifier::new())
+            },
+            Space(Modifier::new().width(8.0)),
+            secondary_button("Install File", {
                 let store = store.clone();
-                move || store.dispatch(Action::UpgradeAll)
-            })
-        } else {
-            Box(Modifier::new())
+                move || store.dispatch(Action::PickFile)
+            }),
+            Space(Modifier::new().width(8.0)),
+            secondary_button("Refresh", {
+                let store = store.clone();
+                move || store.dispatch(Action::Refresh)
+            }),
+            Space(Modifier::new().width(8.0)),
+            secondary_button("Settings", {
+                let store = store.clone();
+                move || store.dispatch(Action::OpenSettings)
+            }),
+            Space(Modifier::new().width(8.0)),
+            primary_button("Upgrades", {
+                let store = store.clone();
+                move || store.dispatch(Action::Upgrades)
+            }),
+        ],
+        TopAppBarConfig {
+            colors: TopAppBarColors {
+                container_color: Color::TRANSPARENT,
+                scrolled_container_color: Color::TRANSPARENT,
+                ..Default::default()
+            },
+            ..Default::default()
         },
-        Space(Modifier::new().width(8.0)),
-        secondary_button("Install File", {
-            let store = store.clone();
-            move || store.dispatch(Action::PickFile)
-        }),
-        Space(Modifier::new().width(8.0)),
-        secondary_button("Refresh", {
-            let store = store.clone();
-            move || store.dispatch(Action::Refresh)
-        }),
-        Space(Modifier::new().width(8.0)),
-        secondary_button("Settings", {
-            let store = store.clone();
-            move || store.dispatch(Action::OpenSettings)
-        }),
-        Space(Modifier::new().width(8.0)),
-        primary_button("Upgrades", {
-            let store = store.clone();
-            move || store.dispatch(Action::Upgrades)
-        }),
-    ])
+    )
 }
 
 fn search_section(store: &Rc<Store>, s: &AppState) -> View {
@@ -88,8 +91,8 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
         Modifier::new()
             .fill_max_width()
             .padding_values(PaddingValues {
-                left: 16.0,
-                right: 16.0,
+                left: 0.0,
+                right: 0.0,
                 top: 8.0,
                 bottom: 8.0,
             }),
@@ -141,54 +144,134 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
             }),
         )),
         Space(Modifier::new().height(8.0)),
-        Row(Modifier::new().fill_max_width()).child(vec![
-            chip("Repo", s.filter_repo, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterRepo)
-            }),
-            Space(Modifier::new().width(6.0)),
-            chip("AUR", s.filter_aur, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterAur)
-            }),
-            Space(Modifier::new().width(6.0)),
-            chip("Flatpak", s.filter_flatpak, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterFlatpak)
-            }),
-            Space(Modifier::new().width(6.0)),
-            chip("AppImage", s.filter_appimage, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterAppImage)
-            }),
-            Space(Modifier::new().width(6.0)),
-            chip("Installed only", s.filter_installed, {
-                let store = store.clone();
-                move || store.dispatch(Action::ToggleFilterInstalled)
-            }),
-            Spacer(),
-            Text("Sort:")
-                .size(FONT_SM)
-                .color(Color::from_hex(TEXT_DIMMED))
-                .modifier(Modifier::new().align_self_center()),
-            Space(Modifier::new().width(6.0)),
-            chip("Popular", s.sort == SortMode::Popularity, {
-                let store = store.clone();
-                move || store.dispatch(Action::SetSort(SortMode::Popularity))
-            }),
-            Space(Modifier::new().width(4.0)),
-            chip("A-Z", s.sort == SortMode::NameAsc, {
-                let store = store.clone();
-                move || store.dispatch(Action::SetSort(SortMode::NameAsc))
-            }),
-            Space(Modifier::new().width(4.0)),
-            chip("Z-A", s.sort == SortMode::NameDesc, {
-                let store = store.clone();
-                move || store.dispatch(Action::SetSort(SortMode::NameDesc))
-            }),
-        ]),
-    ))
-}
+        {
+            let chip_cfg = ChipConfig {
+                colors: ChipColors {
+                    container_color: Color::from_hex(CARD_BORDER),
+                    label_color: Color::from_hex(TEXT_MUTED),
+                    leading_icon_color: Color::from_hex(TEXT_MUTED),
+                    trailing_icon_color: Color::from_hex(TEXT_MUTED),
+                    disabled_container_color: Color::from_hex(CARD_BORDER),
+                    disabled_label_color: Color::from_hex(TEXT_DIMMED),
+                    disabled_leading_icon_color: Color::from_hex(TEXT_DIMMED),
+                    disabled_trailing_icon_color: Color::from_hex(TEXT_DIMMED),
+                    selected_container_color: Color::from_hex(SEL_BG),
+                    selected_label_color: Color::from_hex(TEXT_PRIMARY),
+                    selected_leading_icon_color: Color::from_hex(TEXT_PRIMARY),
+                    selected_trailing_icon_color: Color::from_hex(TEXT_PRIMARY),
+                    disabled_selected_container_color: Color::from_hex(SEL_BG),
+                },
+                border_color: Color::from_hex(CARD_BORDER),
+                selected_border_color: Color::from_hex(BLUE_BORDER),
+                ..Default::default()
+            };
+            Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child(vec![
+                FilterChip(
+                    s.filter_repo,
+                    {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ToggleFilterRepo)
+                    },
+                    Text("Repo").size(FONT_SM),
+                    None,
+                    None,
+                    ChipConfig { ..chip_cfg.clone() },
+                ),
+                Space(Modifier::new().width(6.0)),
+                FilterChip(
+                    s.filter_aur,
+                    {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ToggleFilterAur)
+                    },
+                    Text("AUR").size(FONT_SM),
+                    None,
+                    None,
+                    ChipConfig { ..chip_cfg.clone() },
+                ),
+                Space(Modifier::new().width(6.0)),
+                FilterChip(
+                    s.filter_flatpak,
+                    {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ToggleFilterFlatpak)
+                    },
+                    Text("Flatpak").size(FONT_SM),
+                    None,
+                    None,
+                    ChipConfig { ..chip_cfg.clone() },
+                ),
+                Space(Modifier::new().width(6.0)),
+                FilterChip(
+                    s.filter_appimage,
+                    {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ToggleFilterAppImage)
+                    },
+                    Text("AppImage").size(FONT_SM),
+                    None,
+                    None,
+                    ChipConfig { ..chip_cfg.clone() },
+                ),
+                Space(Modifier::new().width(6.0)),
+                FilterChip(
+                    s.filter_installed,
+                    {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ToggleFilterInstalled)
+                    },
+                    Text("Installed only").size(FONT_SM),
+                    None,
+                    None,
+                    ChipConfig { ..chip_cfg },
+                ),
+                Spacer(),
+            SegmentedButton(
+                &[match s.sort {
+                    SortMode::Popularity => 0,
+                    SortMode::NameAsc => 1,
+                    SortMode::NameDesc => 2,
+                }],
+                vec![
+                    Segment {
+                        label: "Popular".into(),
+                        icon: None,
+                        on_click: Rc::new({
+                            let store = store.clone();
+                            move || store.dispatch(Action::SetSort(SortMode::Popularity))
+                        }),
+                        enabled: true,
+                    },
+                    Segment {
+                        label: "A-Z".into(),
+                        icon: None,
+                        on_click: Rc::new({
+                            let store = store.clone();
+                            move || store.dispatch(Action::SetSort(SortMode::NameAsc))
+                        }),
+                        enabled: true,
+                    },
+                    Segment {
+                        label: "Z-A".into(),
+                        icon: None,
+                        on_click: Rc::new({
+                            let store = store.clone();
+                            move || store.dispatch(Action::SetSort(SortMode::NameDesc))
+                        }),
+                        enabled: true,
+                    },
+                ],
+                SegmentedButtonConfig {
+                    selected_container_color: Color::from_hex(SEL_BG),
+                    selected_content_color: Color::from_hex(TEXT_PRIMARY),
+                    unselected_content_color: Color::from_hex(TEXT_MUTED),
+                    border_color: Color::from_hex(CARD_BORDER),
+                    ..Default::default()
+                },
+            ),
+        ])
+    },
+))}
 
 fn pkg_action(store: &Rc<Store>, pkg: &PackageSummary, upgrades_mode: bool) -> View {
     let id = pkg.id.clone();
@@ -292,7 +375,7 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
         remember_with_key("pkg_scroll", LazyColumnState::new),
         Modifier::new()
             .fill_max_width()
-            .flex_grow(1.0)
+            .weight(1.0)
             .clip_rounded(R_SM)
             .padding(4.0),
         |pkg: &PackageSummary| {
@@ -384,7 +467,10 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
                 )),
             )),
             Space(Modifier::new().height(16.0)),
-            divider(),
+            HorizontalDivider(DividerConfig {
+                color: Color::from_hex(CARD_BORDER),
+                ..Default::default()
+            }),
             Space(Modifier::new().height(12.0)),
             detail_section,
         )),
@@ -427,16 +513,20 @@ fn details_body(det: &PackageDetails) -> View {
     }
     if !info_rows.is_empty() {
         rows.push(
-            Column(
-                Modifier::new()
-                    .fill_max_width()
-                    .padding(12.0)
-                    .margin_vertical(8.0)
-                    .background(Color::from_hex(CARD_BG))
-                    .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-                    .clip_rounded(R_MD),
-            )
-            .child(info_rows),
+            Card(
+                CardConfig {
+                    container_color: Color::from_hex(CARD_BG),
+                    border: Some((1.0, Color::from_hex(CARD_BORDER))),
+                    shape_radius: R_MD,
+                    ..Default::default()
+                },
+                || {
+                    Column(Modifier::new()
+                        .fill_max_width()
+                        .padding(12.0))
+                    .child(info_rows)
+                },
+            ),
         );
     }
 
@@ -498,40 +588,51 @@ fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
 
     Column(Modifier::new().fill_max_width().margin_vertical(4.0)).child((
         indicator,
-        Row(Modifier::new()
-            .fill_max_width()
-            .padding(10.0)
-            .background(Color::from_hex(CARD_BG))
-            .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-            .clip_rounded(R_MD))
-        .child((
-            Text("●")
-                .size(8.0)
-                .color(Color::from_hex(if s.active_stage.is_some() {
-                    INDIGO
-                } else {
-                    STATUS_DOT
-                }))
-                .modifier(Modifier::new().align_self_center().padding(4.0)),
-            Text(last.to_string())
-                .size(FONT_SM)
-                .color(Color::from_hex(TEXT_MUTED))
-                .modifier(Modifier::new().flex_grow(1.0).align_self_center()),
-            secondary_button(
-                if s.log_expanded {
-                    "Hide log"
-                } else {
-                    "Show log"
-                },
-                {
-                    let store = store.clone();
-                    move || store.dispatch(Action::ToggleLog)
-                },
-            ),
-        )),
+        Card(
+            CardConfig {
+                container_color: Color::from_hex(CARD_BG),
+                border: Some((1.0, Color::from_hex(CARD_BORDER))),
+                shape_radius: R_MD,
+                ..Default::default()
+            },
+            || {
+                Row(Modifier::new()
+                    .fill_max_width()
+                    .padding_values(PaddingValues {
+                        left: 10.0,
+                        right: 10.0,
+                        top: 10.0,
+                        bottom: 10.0,
+                    }))
+                .child((
+                    Text("●")
+                        .size(8.0)
+                        .color(Color::from_hex(if s.active_stage.is_some() {
+                            INDIGO
+                        } else {
+                            STATUS_DOT
+                        }))
+                        .modifier(Modifier::new().align_self_center().padding(4.0)),
+                    Text(last.to_string())
+                        .size(FONT_SM)
+                        .color(Color::from_hex(TEXT_MUTED))
+                        .modifier(Modifier::new().flex_grow(1.0).align_self_center()),
+                    secondary_button(
+                        if s.log_expanded {
+                            "Hide log"
+                        } else {
+                            "Show log"
+                        },
+                        {
+                            let store = store.clone();
+                            move || store.dispatch(Action::ToggleLog)
+                        },
+                    ),
+                ))
+            },
+        ),
     ))
 }
-
 fn log_panel(s: &AppState) -> View {
     if !s.log_expanded {
         return Box(Modifier::new());
@@ -543,6 +644,7 @@ fn log_panel(s: &AppState) -> View {
         Modifier::new()
             .fill_max_width()
             .height(LOG_HEIGHT_DP)
+            .flex_shrink(0.0)
             .padding(12.0)
             .margin_vertical(4.0)
             .background(Color::from_hex(CARD_BG))
@@ -596,7 +698,13 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
                             })
                         }
                     },
-                    SwitchConfig::default(),
+                    SwitchConfig {
+                        checked_track_color: Color::from_hex(SEL_BG),
+                        unchecked_track_color: Color::from_hex(CARD_BORDER),
+                        checked_thumb_color: Color::from_hex(TEXT_PRIMARY),
+                        unchecked_thumb_color: Color::from_hex(TEXT_MUTED),
+                        ..Default::default()
+                    },
                 )),
                 Some(Rc::new({
                     let s = store_for_backend.clone();
@@ -674,17 +782,23 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
             ),
             Space(Modifier::new().height(12.0)),
             section("Info"),
-            Row(Modifier::new()
-                .fill_max_width()
-                .padding(12.0)
-                .margin_vertical(3.0)
-                .background(Color::from_hex(CARD_BG))
-                .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-                .clip_rounded(R_MD))
-            .child(
-                Text("Disabled backends take effect after restart.")
-                    .size(FONT_XS)
-                    .color(Color::from_hex(TEXT_DIMMED)),
+            Card(
+                CardConfig {
+                    container_color: Color::from_hex(CARD_BG),
+                    border: Some((1.0, Color::from_hex(CARD_BORDER))),
+                    shape_radius: R_MD,
+                    ..Default::default()
+                },
+                || {
+                    Row(Modifier::new()
+                        .fill_max_width()
+                        .padding(12.0))
+                    .child(
+                        Text("Disabled backends take effect after restart.")
+                            .size(FONT_XS)
+                            .color(Color::from_hex(TEXT_DIMMED)),
+                    )
+                },
             ),
             Space(Modifier::new().height(40.0)),
         ]),
@@ -693,14 +807,29 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
 
 fn home_view(store: Rc<Store>) -> View {
     let s = store.state.get();
-    Column(Modifier::new().fill_max_size().padding(16.0)).child((
+    Column(Modifier::new().fill_max_size()).child((
         top_bar(&store, &s),
-        divider(),
-        search_section(&store, &s),
-        Space(Modifier::new().height(8.0)),
-        results_list(&store, &s),
-        status_bar(&store, &s),
-        log_panel(&s),
+        HorizontalDivider(DividerConfig {
+            color: Color::from_hex(CARD_BORDER),
+            ..Default::default()
+        }),
+        Column(Modifier::new()
+            .fill_max_width()
+            .flex_grow(1.0)
+            .padding_values(PaddingValues {
+                left: 16.0,
+                right: 16.0,
+                top: 0.0,
+                bottom: 0.0,
+            }),
+        )
+        .child((
+            search_section(&store, &s),
+            Space(Modifier::new().height(8.0)),
+            results_list(&store, &s),
+            status_bar(&store, &s),
+            log_panel(&s),
+        )),
     ))
 }
 

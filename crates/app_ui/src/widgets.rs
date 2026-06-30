@@ -6,7 +6,7 @@ use bigcolor::BigColor;
 use colorhash::ColorHash;
 use domain::{PackageSummary, Source};
 use repose_core::*;
-use repose_material::material3::{Button, ButtonConfig};
+use repose_material::material3::{Button, ButtonConfig, Card, CardConfig, FilledTonalButton, OutlinedButton};
 use repose_ui::*;
 
 fn badge(label: &str, fg: &str, bg: &str) -> View {
@@ -75,85 +75,82 @@ pub fn source_badge(pkg: &PackageSummary) -> View {
     }
 }
 
-pub fn chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {
-    let (bg, border, fg) = if on {
-        (CHIP_ON_BG, CHIP_ON_BORDER, CHIP_ON_TEXT)
-    } else {
-        (CHIP_OFF_BG, CHIP_OFF_BORDER, CHIP_OFF_TEXT)
-    };
-    Button(
-        Modifier::new()
-            .padding_values(PaddingValues {
-                left: 14.0,
-                right: 14.0,
-                top: 6.0,
-                bottom: 6.0,
-            })
-            .background(Color::from_hex(bg))
-            .border(1.0, Color::from_hex(border), 999.0)
-            .clip_rounded(999.0),
-        on_click,
-        ButtonConfig::default(),
-        || Text(label).size(FONT_SM).color(Color::from_hex(fg)),
-    )
-}
-
 pub fn primary_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(BLUE_BG, BLUE_BORDER), on_click, ButtonConfig::default(), || {
-        Text(label)
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_PRIMARY))
-    })
+    FilledTonalButton(
+        Modifier::new(),
+        on_click,
+        ButtonConfig {
+            container_color: Some(Color::from_hex(SEL_BG)),
+            content_color: Some(Color::from_hex(TEXT_PRIMARY)),
+            ..Default::default()
+        },
+        || Text(label).size(FONT_BASE),
+    )
 }
 
 pub fn secondary_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(CHIP_OFF_BG, CHIP_OFF_BORDER), on_click, ButtonConfig::default(), || {
-        Text(label)
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_MUTED))
-    })
+    OutlinedButton(
+        Modifier::new(),
+        on_click,
+        ButtonConfig {
+            container_color: Some(Color::from_hex(CARD_BORDER)),
+            content_color: Some(Color::from_hex(TEXT_MUTED)),
+            ..Default::default()
+        },
+        || Text(label).size(FONT_BASE),
+    )
 }
 
 pub fn success_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(GREEN_BG, GREEN_BORDER), on_click, ButtonConfig::default(), || {
-        Text(label)
-            .size(FONT_BASE)
-            .color(Color::from_hex(TEXT_PRIMARY))
-    })
+    Button(
+        Modifier::new(),
+        on_click,
+        ButtonConfig {
+            container_color: Some(Color::from_hex(GREEN_BG)),
+            content_color: Some(Color::from_hex(TEXT_PRIMARY)),
+            ..Default::default()
+        },
+        || Text(label).size(FONT_BASE),
+    )
 }
 
 pub fn danger_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(RED_BG, RED_BORDER), on_click, ButtonConfig::default(), || {
-        Text(label).size(FONT_BASE).color(Color::from_hex(RED))
-    })
-}
-
-pub fn divider() -> View {
-    Box(Modifier::new()
-        .height(1.0)
-        .fill_max_width()
-        .background(Color::from_hex(CARD_BORDER))
-        .margin_vertical(4.0))
+    Button(
+        Modifier::new(),
+        on_click,
+        ButtonConfig {
+            container_color: Some(Color::from_hex(RED_BG)),
+            content_color: Some(Color::from_hex(RED)),
+            ..Default::default()
+        },
+        || Text(label).size(FONT_BASE),
+    )
 }
 
 pub fn empty_state(title: &str, subtitle: &str) -> View {
-    Column(
-        Modifier::new()
-            .padding(32.0)
-            .fill_max_width()
-            .then(card_mod()),
+    Column(Modifier::new().fill_max_width()).child(
+        Card(
+            CardConfig {
+                container_color: Color::from_hex(CARD_BG),
+                border: Some((1.0, Color::from_hex(CARD_BORDER))),
+                shape_radius: R_LG,
+                ..Default::default()
+            },
+            || {
+                Column(Modifier::new().fill_max_width().padding(32.0)).child((
+                    Text(title)
+                        .size(FONT_LG)
+                        .color(Color::from_hex(TEXT_MUTED))
+                        .modifier(Modifier::new().align_self_center()),
+                    Space(Modifier::new().height(6.0)),
+                    Text(subtitle)
+                        .size(FONT_SM)
+                        .color(Color::from_hex(TEXT_DIMMED))
+                        .modifier(Modifier::new().align_self_center()),
+                ))
+            },
+        ),
     )
-    .child((
-        Text(title)
-            .size(FONT_LG)
-            .color(Color::from_hex(TEXT_MUTED))
-            .modifier(Modifier::new().align_self_center()),
-        Space(Modifier::new().height(6.0)),
-        Text(subtitle)
-            .size(FONT_SM)
-            .color(Color::from_hex(TEXT_DIMMED))
-            .modifier(Modifier::new().align_self_center()),
-    ))
 }
 
 /// Labelled metadata row:  "Label    value"
