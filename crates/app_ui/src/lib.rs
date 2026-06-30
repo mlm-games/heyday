@@ -4,8 +4,8 @@ use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
 use repose_material::material3::{
-    Card, CardConfig, CenterAlignedTopAppBar, ChipColors, ChipConfig, FilterChip, HorizontalDivider,
-    DividerConfig, IconButton, IconButtonConfig, LinearProgressIndicator,
+    Card, CardConfig, CenterAlignedTopAppBar, ChipColors, ChipConfig, DividerConfig, FilterChip,
+    HorizontalDivider, IconButton, IconButtonConfig, LinearProgressIndicator,
     LinearProgressIndicatorConfig, ListItem, ListItemConfig, Segment, SegmentedButton,
     SegmentedButtonConfig, Surface, SurfaceConfig, Switch, SwitchConfig, TopAppBarColors,
     TopAppBarConfig,
@@ -42,7 +42,9 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
     };
 
     CenterAlignedTopAppBar(
-        Text(title).size(FONT_2XL).color(Color::from_hex(TEXT_PRIMARY)),
+        Text(title)
+            .size(FONT_2XL)
+            .color(Color::from_hex(TEXT_PRIMARY)),
         None,
         None,
         vec![
@@ -165,7 +167,10 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                 selected_border_color: Color::from_hex(BLUE_BORDER),
                 ..Default::default()
             };
-            Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child(vec![
+            Row(Modifier::new()
+                .fill_max_width()
+                .align_items(AlignItems::Center))
+            .child(vec![
                 FilterChip(
                     s.filter_repo,
                     {
@@ -226,52 +231,53 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                     ChipConfig { ..chip_cfg },
                 ),
                 Spacer(),
-            SegmentedButton(
-                &[match s.sort {
-                    SortMode::Popularity => 0,
-                    SortMode::NameAsc => 1,
-                    SortMode::NameDesc => 2,
-                }],
-                vec![
-                    Segment {
-                        label: "Popular".into(),
-                        icon: None,
-                        on_click: Rc::new({
-                            let store = store.clone();
-                            move || store.dispatch(Action::SetSort(SortMode::Popularity))
-                        }),
-                        enabled: true,
+                SegmentedButton(
+                    &[match s.sort {
+                        SortMode::Popularity => 0,
+                        SortMode::NameAsc => 1,
+                        SortMode::NameDesc => 2,
+                    }],
+                    vec![
+                        Segment {
+                            label: "Popular".into(),
+                            icon: None,
+                            on_click: Rc::new({
+                                let store = store.clone();
+                                move || store.dispatch(Action::SetSort(SortMode::Popularity))
+                            }),
+                            enabled: true,
+                        },
+                        Segment {
+                            label: "A-Z".into(),
+                            icon: None,
+                            on_click: Rc::new({
+                                let store = store.clone();
+                                move || store.dispatch(Action::SetSort(SortMode::NameAsc))
+                            }),
+                            enabled: true,
+                        },
+                        Segment {
+                            label: "Z-A".into(),
+                            icon: None,
+                            on_click: Rc::new({
+                                let store = store.clone();
+                                move || store.dispatch(Action::SetSort(SortMode::NameDesc))
+                            }),
+                            enabled: true,
+                        },
+                    ],
+                    SegmentedButtonConfig {
+                        selected_container_color: Color::from_hex(SEL_BG),
+                        selected_content_color: Color::from_hex(TEXT_PRIMARY),
+                        unselected_content_color: Color::from_hex(TEXT_MUTED),
+                        border_color: Color::from_hex(CARD_BORDER),
+                        ..Default::default()
                     },
-                    Segment {
-                        label: "A-Z".into(),
-                        icon: None,
-                        on_click: Rc::new({
-                            let store = store.clone();
-                            move || store.dispatch(Action::SetSort(SortMode::NameAsc))
-                        }),
-                        enabled: true,
-                    },
-                    Segment {
-                        label: "Z-A".into(),
-                        icon: None,
-                        on_click: Rc::new({
-                            let store = store.clone();
-                            move || store.dispatch(Action::SetSort(SortMode::NameDesc))
-                        }),
-                        enabled: true,
-                    },
-                ],
-                SegmentedButtonConfig {
-                    selected_container_color: Color::from_hex(SEL_BG),
-                    selected_content_color: Color::from_hex(TEXT_PRIMARY),
-                    unselected_content_color: Color::from_hex(TEXT_MUTED),
-                    border_color: Color::from_hex(CARD_BORDER),
-                    ..Default::default()
-                },
-            ),
-        ])
-    },
-))}
+                ),
+            ])
+        },
+    ))
+}
 
 fn pkg_action(store: &Rc<Store>, pkg: &PackageSummary, upgrades_mode: bool) -> View {
     let id = pkg.id.clone();
@@ -301,6 +307,12 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, _selected: bool, upgrades_mode
         .margin_vertical(3.0)
         .background(Color::from_hex(bg))
         .border(1.0, Color::from_hex(border), R_MD)
+        .state_colors(StateColors {
+            default: Color::TRANSPARENT,
+            hovered: Color::from_hex("#FFFFFF").with_alpha_f32(0.02),
+            pressed: Color::from_hex("#FFFFFF").with_alpha_f32(0.10),
+            disabled: Color::TRANSPARENT,
+        })
         .clip_rounded(R_MD)
         .clickable()
         .on_pointer_down({
@@ -512,22 +524,15 @@ fn details_body(det: &PackageDetails) -> View {
         info_rows.push(detail_row("Download size", &format_bytes(s)));
     }
     if !info_rows.is_empty() {
-        rows.push(
-            Card(
-                CardConfig {
-                    container_color: Color::from_hex(CARD_BG),
-                    border: Some((1.0, Color::from_hex(CARD_BORDER))),
-                    shape_radius: R_MD,
-                    ..Default::default()
-                },
-                || {
-                    Column(Modifier::new()
-                        .fill_max_width()
-                        .padding(12.0))
-                    .child(info_rows)
-                },
-            ),
-        );
+        rows.push(Card(
+            CardConfig {
+                container_color: Color::from_hex(CARD_BG),
+                border: Some((1.0, Color::from_hex(CARD_BORDER))),
+                shape_radius: R_MD,
+                ..Default::default()
+            },
+            || Column(Modifier::new().fill_max_width().padding(12.0)).child(info_rows),
+        ));
     }
 
     if !det.depends.is_empty() {
@@ -790,10 +795,7 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
                     ..Default::default()
                 },
                 || {
-                    Row(Modifier::new()
-                        .fill_max_width()
-                        .padding(12.0))
-                    .child(
+                    Row(Modifier::new().fill_max_width().padding(12.0)).child(
                         Text("Disabled backends take effect after restart.")
                             .size(FONT_XS)
                             .color(Color::from_hex(TEXT_DIMMED)),
@@ -813,15 +815,16 @@ fn home_view(store: Rc<Store>) -> View {
             color: Color::from_hex(CARD_BORDER),
             ..Default::default()
         }),
-        Column(Modifier::new()
-            .fill_max_width()
-            .flex_grow(1.0)
-            .padding_values(PaddingValues {
-                left: 16.0,
-                right: 16.0,
-                top: 0.0,
-                bottom: 0.0,
-            }),
+        Column(
+            Modifier::new()
+                .fill_max_width()
+                .flex_grow(1.0)
+                .padding_values(PaddingValues {
+                    left: 16.0,
+                    right: 16.0,
+                    top: 0.0,
+                    bottom: 0.0,
+                }),
         )
         .child((
             search_section(&store, &s),
