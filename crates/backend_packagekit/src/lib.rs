@@ -182,6 +182,10 @@ impl PackageBackend for PackageKitBackend {
         "packagekit"
     }
 
+    fn group(&self) -> &'static str {
+        "repo"
+    }
+
     fn refresh(&self, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         let txn = self.txn()?;
         txn.set_hints(&["interactive=true"])

@@ -247,6 +247,10 @@ impl PackageBackend for AlpmBackend {
         "alpm"
     }
 
+    fn group(&self) -> &'static str {
+        "repo"
+    }
+
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let pkg = id
             .repo

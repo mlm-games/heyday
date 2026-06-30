@@ -141,6 +141,11 @@ pub type ProgressSink = chan::Sender<Progress>;
 pub trait PackageBackend: Send + Sync {
     fn name(&self) -> &'static str;
 
+    /// Override when multiple backends share a group, (eg: "repo").
+    fn group(&self) -> &'static str {
+        self.name()
+    }
+
     fn refresh(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
 
     fn search(
@@ -453,15 +458,19 @@ impl Executor {
                             }
                         }
                         JobKind::UpgradeAll => {
-                            let names: Vec<&str> = match &job.payload {
+                            let selected_groups: Vec<&str> = match &job.payload {
                                 JobPayload::BackendSelection(v) => {
                                     v.iter().map(|s| s.as_str()).collect()
                                 }
-                                _ => backends.iter().map(|b| b.name()).collect(),
+                                _ => {
+                                    return Err(Error::Internal(
+                                        "UpgradeAll without BackendSelection payload".into(),
+                                    ));
+                                }
                             };
                             let _g = TXN_MUTEX.lock();
-                            for (name, b) in &self.backends {
-                                if names.contains(name) {
+                            for (_, b) in selected.iter() {
+                                if selected_groups.contains(&b.group()) {
                                     b.upgrade_all(&tx_local, &cancel)?;
                                 }
                             }
