@@ -7,15 +7,16 @@ use repose_material::material3::dialog::{Dialog, DialogState};
 use repose_material::material3::{
     Button, ButtonConfig, Card, CardConfig, CenterAlignedTopAppBar, Checkbox, CheckboxConfig,
     ChipColors, ChipConfig, DividerConfig, FilterChip, HorizontalDivider, IconButton,
-    IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig, ListItem,
-    ListItemConfig, Segment, SegmentedButton, SegmentedButtonConfig, Surface, SurfaceConfig,
-    Switch, SwitchConfig, TopAppBarColors, TopAppBarConfig,
+    IconButtonColors, IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig,
+    ListItem, ListItemConfig, Segment, SegmentedButton, SegmentedButtonConfig, Surface,
+    SurfaceConfig, Switch, SwitchConfig, TopAppBarColors, TopAppBarConfig,
 };
 use repose_material::{Icon, material_symbols};
 
 material_symbols! {
     CHEVRON_LEFT: '\u{e5cb}',
     CHECKLIST: '\u{e912}',
+    SEARCH: '\u{e8b6}',
 }
 use repose_navigation::{
     EntryScope, NavDisplay, NavTransition, Navigator, remember_back_stack, renderer,
@@ -109,7 +110,8 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                 s.query.clone(),
                 Modifier::new()
                     .flex_grow(1.0)
-                    .max_width(500.0)
+                    .fill_max_width()
+                    // .max_width(500.0)
                     .height(40.0)
                     .padding_values(PaddingValues {
                         left: 12.0,
@@ -143,10 +145,22 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                 },
             ),
             Space(Modifier::new().width(8.0)),
-            primary_button("Search", {
-                let store = store.clone();
-                move || store.dispatch(Action::Search)
-            }),
+            IconButton(
+                Icon(Symbols::SEARCH).color(Color::from_hex(TEXT_PRIMARY)),
+                {
+                    let store = store.clone();
+                    move || store.dispatch(Action::Search)
+                },
+                IconButtonConfig {
+                    colors: IconButtonColors {
+                        container_color: Color::from_hex(SEL_BG),
+                        content_color: Color::from_hex(TEXT_PRIMARY),
+                        disabled_container_color: Color::from_hex(SEL_BG),
+                        disabled_content_color: Color::from_hex(TEXT_DIMMED),
+                    },
+                    ..Default::default()
+                },
+            ),
         )),
         Space(Modifier::new().height(8.0)),
         {
@@ -825,22 +839,19 @@ fn settings_view(store: Rc<Store>, overlay: OverlayHandle, s: &AppState) -> View
                     upgrade_checkbox("Flatpak", "flatpak", settings.upgrade_flatpak, &store),
                     upgrade_checkbox("AppImage", "appimage", settings.upgrade_appimage, &store),
                     Space(Modifier::new().height(20.0)),
-                    Row(Modifier::new().fill_max_width()).child((
-                        Spacer(),
-                        {
-                            let d = upgrade_dialog_state.clone();
-                            Button(
-                                Modifier::new(),
-                                move || d.dismiss(),
-                                ButtonConfig {
-                                    container_color: Some(Color::from_hex(SEL_BG)),
-                                    content_color: Some(Color::from_hex(TEXT_PRIMARY)),
-                                    ..Default::default()
-                                },
-                                || Text("Done".to_string()),
-                            )
-                        },
-                    )),
+                    Row(Modifier::new().fill_max_width()).child((Spacer(), {
+                        let d = upgrade_dialog_state.clone();
+                        Button(
+                            Modifier::new(),
+                            move || d.dismiss(),
+                            ButtonConfig {
+                                container_color: Some(Color::from_hex(SEL_BG)),
+                                content_color: Some(Color::from_hex(TEXT_PRIMARY)),
+                                ..Default::default()
+                            },
+                            || Text("Done".to_string()),
+                        )
+                    })),
                 ]),
             ),
             Space(Modifier::new().height(12.0)),
@@ -865,15 +876,13 @@ fn settings_view(store: Rc<Store>, overlay: OverlayHandle, s: &AppState) -> View
     )
 }
 
-fn upgrade_checkbox(
-    label: &str,
-    backend_key: &str,
-    enabled: bool,
-    store: &Rc<Store>,
-) -> View {
+fn upgrade_checkbox(label: &str, backend_key: &str, enabled: bool, store: &Rc<Store>) -> View {
     let key = backend_key.to_string();
     let store_cb = store.clone();
-    Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
+    Row(Modifier::new()
+        .fill_max_width()
+        .align_items(AlignItems::Center))
+    .child((
         Checkbox(
             enabled,
             move |v| {
