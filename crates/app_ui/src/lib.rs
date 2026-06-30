@@ -3,8 +3,11 @@ use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
-use repose_material::material3::{IconButton, IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig, ListItem, ListItemConfig, Surface, SurfaceConfig, Switch, SwitchConfig};
-use repose_material::{material_symbols, Icon};
+use repose_material::material3::{
+    IconButton, IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig, ListItem,
+    ListItemConfig, Surface, SurfaceConfig, Switch, SwitchConfig,
+};
+use repose_material::{Icon, material_symbols};
 
 material_symbols! {
     CHEVRON_LEFT: '\u{e5cb}',
@@ -13,7 +16,7 @@ use repose_navigation::{
     EntryScope, NavDisplay, NavTransition, Navigator, remember_back_stack, renderer,
 };
 use repose_ui::{
-    lazy::{LazyColumn},
+    lazy::LazyColumn,
     lazy_states::LazyColumnState,
     scroll::{ScrollArea, remember_scroll_state},
     *,
@@ -330,25 +333,24 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
         "detail:{}:{:?}",
         summary.id.name, summary.id.source
     ));
+    scroll.set_show_scrollbar(false);
 
     ScrollArea(
         Modifier::new().fill_max_size().padding(24.0),
         scroll,
-        Column(
-            Modifier::new()
-                .fill_max_size()
-                .max_width(780.0)
-                .align_self_center(),
-        )
-        .child((
+        Column(Modifier::new().fill_max_size().align_self_center()).child((
             Row(Modifier::new()
                 .fill_max_width()
                 .align_items(AlignItems::Center))
             .child((
-                IconButton(Icon(Symbols::CHEVRON_LEFT), {
-                    let store = store.clone();
-                    move || store.dispatch(Action::ClearSelection)
-                }, IconButtonConfig::default()),
+                IconButton(
+                    Icon(Symbols::CHEVRON_LEFT),
+                    {
+                        let store = store.clone();
+                        move || store.dispatch(Action::ClearSelection)
+                    },
+                    IconButtonConfig::default(),
+                ),
                 Spacer(),
                 pkg_action(&store, &summary, s.in_upgrades_view),
             )),
@@ -563,73 +565,124 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
         Text(title.to_string())
             .size(FONT_SM)
             .color(Color::from_hex(TEXT_DIMMED))
-            .modifier(Modifier::new()
-                .padding_values(PaddingValues { left: 4.0, right: 0.0, top: 16.0, bottom: 8.0 }))
+            .modifier(Modifier::new().padding_values(PaddingValues {
+                left: 4.0,
+                right: 0.0,
+                top: 16.0,
+                bottom: 8.0,
+            }))
     };
 
     let section_gap = || Space(Modifier::new().height(4.0));
 
     let store_for_backend = store.clone();
-    let backend_item = move |label: &str, desc: &str, badge: View, enabled: bool, backend_key: &str| {
-        let key = backend_key.to_string();
-        ListItem(
-            label,
-            Some(desc.into()),
-            Some(badge),
-            Some(Switch(
-                enabled,
-                {
+    let backend_item =
+        move |label: &str, desc: &str, badge: View, enabled: bool, backend_key: &str| {
+            let key = backend_key.to_string();
+            ListItem(
+                label,
+                Some(desc.into()),
+                Some(badge),
+                Some(Switch(
+                    enabled,
+                    {
+                        let s = store_for_backend.clone();
+                        let k = key.clone();
+                        move |v| {
+                            s.dispatch(Action::SetBackendEnabled {
+                                backend: k.clone(),
+                                enabled: v,
+                            })
+                        }
+                    },
+                    SwitchConfig::default(),
+                )),
+                Some(Rc::new({
                     let s = store_for_backend.clone();
-                    let k = key.clone();
-                    move |v| s.dispatch(Action::SetBackendEnabled { backend: k.clone(), enabled: v })
+                    let k = key;
+                    move || {
+                        s.dispatch(Action::SetBackendEnabled {
+                            backend: k.clone(),
+                            enabled: !enabled,
+                        })
+                    }
+                })),
+                ListItemConfig {
+                    shape_radius: R_MD,
+                    ..Default::default()
                 },
-                SwitchConfig::default(),
-            )),
-            Some(Rc::new({
-                let s = store_for_backend.clone();
-                let k = key;
-                move || s.dispatch(Action::SetBackendEnabled { backend: k.clone(), enabled: !enabled })
-            })),
-            ListItemConfig {
-                shape_radius: R_MD,
-                ..Default::default()
-            },
-        )
-    };
+            )
+        };
 
     let scroll = remember_scroll_state("settings_scroll");
+    scroll.set_show_scrollbar(false);
     let store_clone = store.clone();
 
     ScrollArea(
         Modifier::new().fill_max_size().padding(24.0),
         scroll,
-        Column(Modifier::new().fill_max_size().max_width(600.0).align_self_center()).with_children(vec![
-            Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
-                IconButton(Icon(Symbols::CHEVRON_LEFT), move || {
-                    if let Some(ref nav) = *store_clone.navigator.borrow() {
-                        nav.pop();
-                    }
-                }, IconButtonConfig::default()),
+        Column(Modifier::new().fill_max_size().align_self_center()).with_children(vec![
+            Row(Modifier::new()
+                .fill_max_width()
+                .align_items(AlignItems::Center))
+            .child((
+                IconButton(
+                    Icon(Symbols::CHEVRON_LEFT),
+                    move || {
+                        if let Some(ref nav) = *store_clone.navigator.borrow() {
+                            nav.pop();
+                        }
+                    },
+                    IconButtonConfig::default(),
+                ),
                 Spacer(),
-                Text("Settings").size(FONT_2XL).color(Color::from_hex(TEXT_PRIMARY)),
             )),
             Space(Modifier::new().height(8.0)),
             section("Backends"),
-            backend_item("Repo packages", "Packages from Arch Linux repositories (core, extra, multilib)", repo_badge(), settings.enable_repo, "repo"),
+            backend_item(
+                "Repo packages",
+                "Packages from Arch Linux repositories (core, extra, multilib)",
+                repo_badge(),
+                settings.enable_repo,
+                "repo",
+            ),
             section_gap(),
-            backend_item("AUR packages", "Community packages from the Arch User Repository", aur_badge(), settings.enable_aur, "aur"),
+            backend_item(
+                "AUR packages",
+                "Community packages from the Arch User Repository",
+                aur_badge(),
+                settings.enable_aur,
+                "aur",
+            ),
             section_gap(),
-            backend_item("Flatpak packages", "Sandboxed packages from Flathub and other remotes", flatpak_badge(), settings.enable_flatpak, "flatpak"),
+            backend_item(
+                "Flatpak packages",
+                "Sandboxed packages from Flathub and other remotes",
+                flatpak_badge(),
+                settings.enable_flatpak,
+                "flatpak",
+            ),
             section_gap(),
-            backend_item("AppImage packages", "Portable self-contained Linux applications", appimage_badge(), settings.enable_appimage, "appimage"),
+            backend_item(
+                "AppImage packages",
+                "Portable self-contained Linux applications",
+                appimage_badge(),
+                settings.enable_appimage,
+                "appimage",
+            ),
             Space(Modifier::new().height(12.0)),
             section("Info"),
-            Row(Modifier::new().fill_max_width().padding(12.0).margin_vertical(3.0)
+            Row(Modifier::new()
+                .fill_max_width()
+                .padding(12.0)
+                .margin_vertical(3.0)
                 .background(Color::from_hex(CARD_BG))
-                .border(1.0, Color::from_hex(CARD_BORDER), R_MD).clip_rounded(R_MD))
+                .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                .clip_rounded(R_MD))
             .child(
                 Text("Disabled backends take effect after restart.")
-                    .size(FONT_XS).color(Color::from_hex(TEXT_DIMMED)),
+                    .size(FONT_XS)
+                    .color(Color::from_hex(TEXT_DIMMED)),
             ),
             Space(Modifier::new().height(40.0)),
         ]),
