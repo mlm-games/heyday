@@ -3,21 +3,24 @@ use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
+use repose_material::material3::dialog::{Dialog, DialogState};
 use repose_material::material3::{
-    Card, CardConfig, CenterAlignedTopAppBar, ChipColors, ChipConfig, DividerConfig, FilterChip,
-    HorizontalDivider, IconButton, IconButtonConfig, LinearProgressIndicator,
-    LinearProgressIndicatorConfig, ListItem, ListItemConfig, Segment, SegmentedButton,
-    SegmentedButtonConfig, Surface, SurfaceConfig, Switch, SwitchConfig, TopAppBarColors,
-    TopAppBarConfig,
+    Button, ButtonConfig, Card, CardConfig, CenterAlignedTopAppBar, Checkbox, CheckboxConfig,
+    ChipColors, ChipConfig, DividerConfig, FilterChip, HorizontalDivider, IconButton,
+    IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig, ListItem,
+    ListItemConfig, Segment, SegmentedButton, SegmentedButtonConfig, Surface, SurfaceConfig,
+    Switch, SwitchConfig, TopAppBarColors, TopAppBarConfig,
 };
 use repose_material::{Icon, material_symbols};
 
 material_symbols! {
     CHEVRON_LEFT: '\u{e5cb}',
+    CHECKLIST: '\u{e912}',
 }
 use repose_navigation::{
     EntryScope, NavDisplay, NavTransition, Navigator, remember_back_stack, renderer,
 };
+use repose_ui::overlay::OverlayHandle;
 use repose_ui::{
     lazy::LazyColumn,
     lazy_states::LazyColumnState,
@@ -665,7 +668,7 @@ fn log_panel(s: &AppState) -> View {
     )
 }
 
-fn settings_view(store: Rc<Store>, s: &AppState) -> View {
+fn settings_view(store: Rc<Store>, overlay: OverlayHandle, s: &AppState) -> View {
     let settings = &s.settings;
 
     let section = |title: &str| {
@@ -733,6 +736,8 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
     scroll.set_show_scrollbar(false);
     let store_clone = store.clone();
 
+    let upgrade_dialog_state = remember(DialogState::new);
+
     ScrollArea(
         Modifier::new().fill_max_size().padding(24.0),
         scroll,
@@ -769,7 +774,6 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
                 settings.enable_aur,
                 "aur",
             ),
-            section_gap(),
             backend_item(
                 "Flatpak packages",
                 "Sandboxed packages from Flathub and other remotes",
@@ -784,6 +788,60 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
                 appimage_badge(),
                 settings.enable_appimage,
                 "appimage",
+            ),
+            Space(Modifier::new().height(8.0)),
+            {
+                let d = upgrade_dialog_state.clone();
+                ListItem(
+                    "Upgrade all sources",
+                    Some("Choose which backends to include when upgrading all packages".into()),
+                    None,
+                    Some(Icon(Symbols::CHECKLIST)),
+                    None,
+                    Some(Rc::new(move || d.show())),
+                    None,
+                    ListItemConfig {
+                        shape_radius: R_MD,
+                        ..Default::default()
+                    },
+                )
+            },
+            Dialog(
+                upgrade_dialog_state.clone(),
+                overlay,
+                Modifier::new(),
+                Column(Modifier::new().padding(20.0).min_width(320.0)).with_children(vec![
+                    Text("Upgrade all sources".to_string())
+                        .size(FONT_LG)
+                        .font_weight(FontWeight::BOLD)
+                        .color(Color::from_hex(TEXT_PRIMARY)),
+                    Space(Modifier::new().height(4.0)),
+                    Text("Select backends to include")
+                        .size(FONT_XS)
+                        .color(Color::from_hex(TEXT_MUTED)),
+                    Space(Modifier::new().height(16.0)),
+                    upgrade_checkbox("Repository (pacman)", "repo", settings.upgrade_repo, &store),
+                    upgrade_checkbox("AUR", "aur", settings.upgrade_aur, &store),
+                    upgrade_checkbox("Flatpak", "flatpak", settings.upgrade_flatpak, &store),
+                    upgrade_checkbox("AppImage", "appimage", settings.upgrade_appimage, &store),
+                    Space(Modifier::new().height(20.0)),
+                    Row(Modifier::new().fill_max_width()).child((
+                        Spacer(),
+                        {
+                            let d = upgrade_dialog_state.clone();
+                            Button(
+                                Modifier::new(),
+                                move || d.dismiss(),
+                                ButtonConfig {
+                                    container_color: Some(Color::from_hex(SEL_BG)),
+                                    content_color: Some(Color::from_hex(TEXT_PRIMARY)),
+                                    ..Default::default()
+                                },
+                                || Text("Done".to_string()),
+                            )
+                        },
+                    )),
+                ]),
             ),
             Space(Modifier::new().height(12.0)),
             section("Info"),
@@ -805,6 +863,44 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
             Space(Modifier::new().height(40.0)),
         ]),
     )
+}
+
+fn upgrade_checkbox(
+    label: &str,
+    backend_key: &str,
+    enabled: bool,
+    store: &Rc<Store>,
+) -> View {
+    let key = backend_key.to_string();
+    let store_cb = store.clone();
+    Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
+        Checkbox(
+            enabled,
+            move |v| {
+                store_cb.dispatch(Action::SetUpgradeAllSource {
+                    backend: key.clone(),
+                    enabled: v,
+                })
+            },
+            CheckboxConfig {
+                checked_color: Color::from_hex(SEL_BG),
+                unchecked_color: Color::from_hex(CARD_BORDER),
+                checkmark_color: Color::from_hex(TEXT_PRIMARY),
+                checked_border_color: Color::from_hex(SEL_BG),
+                unchecked_border_color: Color::from_hex(TEXT_MUTED),
+                state_colors: StateColors {
+                    default: Color::TRANSPARENT,
+                    hovered: Color::from_hex(SEL_BG).with_alpha_f32(0.15),
+                    pressed: Color::from_hex(SEL_BG).with_alpha_f32(0.25),
+                    disabled: Color::TRANSPARENT,
+                },
+                ..Default::default()
+            },
+        ),
+        Text(label.to_string())
+            .size(FONT_SM)
+            .color(Color::from_hex(TEXT_PRIMARY)),
+    ))
 }
 
 fn home_view(store: Rc<Store>) -> View {
@@ -836,7 +932,7 @@ fn home_view(store: Rc<Store>) -> View {
     ))
 }
 
-pub fn root_view(store: Rc<Store>) -> View {
+pub fn root_view(store: Rc<Store>, overlay: OverlayHandle) -> View {
     let stack = remember_back_stack(Route::Home);
     *store.navigator.borrow_mut() = Some(Navigator {
         stack: (*stack).clone(),
@@ -860,7 +956,7 @@ pub fn root_view(store: Rc<Store>) -> View {
                     }
                     Route::Settings => {
                         let s = store.state.get();
-                        settings_view(store.clone(), &s)
+                        settings_view(store.clone(), overlay.clone(), &s)
                     }
                 }),
                 None,

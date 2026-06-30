@@ -222,6 +222,7 @@ pub enum JobPayload {
     Query(String),
     Package(PackageId),
     InstallFile(String),
+    BackendSelection(Vec<String>),
 }
 
 #[derive(Clone, Debug)]
@@ -452,9 +453,17 @@ impl Executor {
                             }
                         }
                         JobKind::UpgradeAll => {
+                            let names: Vec<&str> = match &job.payload {
+                                JobPayload::BackendSelection(v) => {
+                                    v.iter().map(|s| s.as_str()).collect()
+                                }
+                                _ => backends.iter().map(|b| b.name()).collect(),
+                            };
                             let _g = TXN_MUTEX.lock();
-                            for b in backends {
-                                b.upgrade_all(&tx_local, &cancel)?;
+                            for (name, b) in &self.backends {
+                                if names.contains(name) {
+                                    b.upgrade_all(&tx_local, &cancel)?;
+                                }
                             }
                             Ok(())
                         }

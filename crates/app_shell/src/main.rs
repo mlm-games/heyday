@@ -88,6 +88,6 @@ fn main() -> anyhow::Result<()> {
         while let Ok(e) = rx_evt.try_recv() {
             store.dispatch(Action::Event(e));
         }
-        overlay.host(Modifier::new().fill_max_size(), root_view(store.clone()))
+        overlay.host(Modifier::new().fill_max_size(), root_view(store.clone(), overlay.clone()))
     })
 }

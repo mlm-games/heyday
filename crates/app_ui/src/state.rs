@@ -145,6 +145,7 @@ pub enum Action {
     PickFile,
     OpenSettings,
     SetBackendEnabled { backend: String, enabled: bool },
+    SetUpgradeAllSource { backend: String, enabled: bool },
 }
 
 pub struct Store {
@@ -279,7 +280,17 @@ impl Store {
             }
 
             Action::UpgradeAll => {
-                self.send_job(JobKind::UpgradeAll, JobPayload::None);
+                let selected: Vec<String> = [
+                    ("repo", s.settings.upgrade_repo),
+                    ("aur", s.settings.upgrade_aur),
+                    ("flatpak", s.settings.upgrade_flatpak),
+                    ("appimage", s.settings.upgrade_appimage),
+                ]
+                .into_iter()
+                .filter(|(_, enabled)| *enabled)
+                .map(|(name, _)| name.to_string())
+                .collect();
+                self.send_job(JobKind::UpgradeAll, JobPayload::BackendSelection(selected));
             }
 
             Action::Upgrade(id) => {
@@ -446,6 +457,17 @@ impl Store {
                     "aur" => s.settings.enable_aur = enabled,
                     "flatpak" => s.settings.enable_flatpak = enabled,
                     "appimage" => s.settings.enable_appimage = enabled,
+                    _ => {}
+                }
+                s.settings.save();
+            }
+
+            Action::SetUpgradeAllSource { backend, enabled } => {
+                match backend.as_str() {
+                    "repo" => s.settings.upgrade_repo = enabled,
+                    "aur" => s.settings.upgrade_aur = enabled,
+                    "flatpak" => s.settings.upgrade_flatpak = enabled,
+                    "appimage" => s.settings.upgrade_appimage = enabled,
                     _ => {}
                 }
                 s.settings.save();

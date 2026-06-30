@@ -7,6 +7,10 @@ pub struct Settings {
     pub enable_aur: bool,
     pub enable_flatpak: bool,
     pub enable_appimage: bool,
+    pub upgrade_repo: bool,
+    pub upgrade_aur: bool,
+    pub upgrade_flatpak: bool,
+    pub upgrade_appimage: bool,
 }
 
 impl Default for Settings {
@@ -16,6 +20,10 @@ impl Default for Settings {
             enable_aur: true,
             enable_flatpak: true,
             enable_appimage: true,
+            upgrade_repo: true,
+            upgrade_aur: false,
+            upgrade_flatpak: true,
+            upgrade_appimage: true,
         }
     }
 }
