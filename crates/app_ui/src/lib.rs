@@ -7,7 +7,7 @@ use repose_material::material3::{IconButton, IconButtonConfig, LinearProgressInd
 use repose_material::{material_symbols, Icon};
 
 material_symbols! {
-    ARROW_BACK: '\u{e5c4}',
+    CHEVRON_LEFT: '\u{e5cb}',
 }
 use repose_navigation::{
     EntryScope, NavDisplay, NavTransition, Navigator, remember_back_stack, renderer,
@@ -345,7 +345,7 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
                 .fill_max_width()
                 .align_items(AlignItems::Center))
             .child((
-                IconButton(Icon(Symbols::ARROW_BACK), {
+                IconButton(Icon(Symbols::CHEVRON_LEFT), {
                     let store = store.clone();
                     move || store.dispatch(Action::ClearSelection)
                 }, IconButtonConfig::default()),
@@ -605,7 +605,7 @@ fn settings_view(store: Rc<Store>, s: &AppState) -> View {
         scroll,
         Column(Modifier::new().fill_max_size().max_width(600.0).align_self_center()).with_children(vec![
             Row(Modifier::new().fill_max_width().align_items(AlignItems::Center)).child((
-                IconButton(Icon(Symbols::ARROW_BACK), move || {
+                IconButton(Icon(Symbols::CHEVRON_LEFT), move || {
                     if let Some(ref nav) = *store_clone.navigator.borrow() {
                         nav.pop();
                     }
