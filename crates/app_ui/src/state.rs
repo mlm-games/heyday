@@ -1,4 +1,6 @@
+use crate::theme;
 use crossbeam_channel as chan;
+use domain::config::Settings;
 use domain::*;
 use repose_core::locals::with_theme;
 use repose_core::signal::signal;
@@ -15,6 +17,7 @@ use std::sync::atomic::AtomicU64;
 pub enum Route {
     Home,
     Detail(PackageId),
+    Settings,
 }
 
 const MAX_LOG: usize = 256 * 1024;
@@ -60,6 +63,8 @@ pub struct AppState {
     pub active_stage: Option<Stage>,
     /// Current progress fraction (0.0–1.0), if known.
     pub progress_pct: Option<f32>,
+
+    pub settings: Settings,
 }
 
 impl AppState {
@@ -138,6 +143,8 @@ pub enum Action {
     SetSort(SortMode),
     ToggleLog,
     PickFile,
+    OpenSettings,
+    SetBackendEnabled { backend: String, enabled: bool },
 }
 
 pub struct Store {
@@ -149,13 +156,18 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new(tx_jobs: chan::Sender<domain::Job>, snackbar: Option<SnackbarController>) -> Self {
+    pub fn new(
+        tx_jobs: chan::Sender<domain::Job>,
+        snackbar: Option<SnackbarController>,
+        settings: Settings,
+    ) -> Self {
         let s = AppState {
             filter_repo: true,
             filter_aur: true,
             filter_flatpak: true,
             filter_appimage: true,
             sort: SortMode::default(),
+            settings,
             ..Default::default()
         };
         Self {
@@ -421,6 +433,23 @@ impl Store {
             }
 
             Action::ToggleLog => s.log_expanded = !s.log_expanded,
+
+            Action::OpenSettings => {
+                if let Some(ref nav) = *self.navigator.borrow() {
+                    nav.push(Route::Settings);
+                }
+            }
+
+            Action::SetBackendEnabled { backend, enabled } => {
+                match backend.as_str() {
+                    "repo" => s.settings.enable_repo = enabled,
+                    "aur" => s.settings.enable_aur = enabled,
+                    "flatpak" => s.settings.enable_flatpak = enabled,
+                    "appimage" => s.settings.enable_appimage = enabled,
+                    _ => {}
+                }
+                s.settings.save();
+            }
         }
         self.state.set(s);
     }

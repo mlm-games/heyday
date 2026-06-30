@@ -7,6 +7,7 @@ use app_ui::{
     root_view,
     state::{Action, Store},
 };
+use domain::config::Settings;
 use domain::{Executor, PackageBackend};
 use repose_platform::run_desktop_app;
 use repose_ui::overlay::{OverlayHandle, SnackbarController};
@@ -25,6 +26,8 @@ use backend_packagekit::PackageKitBackend;
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
+    let settings = Settings::load();
+
     let (tx_jobs, rx_jobs) = chan::unbounded();
     let (tx_prog, rx_prog) = chan::unbounded();
     let (tx_evt, rx_evt) = chan::unbounded();
@@ -33,7 +36,7 @@ fn main() -> anyhow::Result<()> {
     let mut backends: Vec<(&'static str, Arc<dyn PackageBackend>)> = Vec::new();
 
     #[cfg(feature = "backend-alpm")]
-    {
+    if settings.enable_repo {
         let repo: Arc<dyn PackageBackend> = Arc::new(AlpmBackend::new());
         backends.push((repo.name(), repo));
     }
@@ -48,22 +51,24 @@ fn main() -> anyhow::Result<()> {
     }
 
     #[cfg(feature = "backend-aur")]
-    {
+    if settings.enable_aur {
         let aur: Arc<dyn PackageBackend> = Arc::new(AurBackend::new());
         backends.push((aur.name(), aur));
     }
 
     #[cfg(feature = "backend-flatpak")]
-    match FlatpakBackend::new(true) {
-        Ok(fp) => {
-            let flatpak: Arc<dyn PackageBackend> = Arc::new(fp);
-            backends.push((flatpak.name(), flatpak));
+    if settings.enable_flatpak {
+        match FlatpakBackend::new(true) {
+            Ok(fp) => {
+                let flatpak: Arc<dyn PackageBackend> = Arc::new(fp);
+                backends.push((flatpak.name(), flatpak));
+            }
+            Err(e) => error!("Flatpak backend unavailable: {e}"),
         }
-        Err(e) => error!("Flatpak backend unavailable: {e}"),
     }
 
     #[cfg(feature = "backend-appimage")]
-    {
+    if settings.enable_appimage {
         let appimage: Arc<dyn PackageBackend> = Arc::new(AppImageBackend::new());
         backends.push((appimage.name(), appimage));
     }
@@ -73,7 +78,7 @@ fn main() -> anyhow::Result<()> {
     let overlay = OverlayHandle::new();
     let snackbar = SnackbarController::new(overlay.clone());
 
-    let store = Rc::new(Store::new(tx_jobs, Some(snackbar)));
+    let store = Rc::new(Store::new(tx_jobs, Some(snackbar), settings));
     // store.dispatch(Action::Refresh);  HACK: enable it once you figure out how octopi can update repos without polkit (is done via local repo updation, but a better soln might also be possible?)
 
     run_desktop_app(move |_sched, _ctx| {

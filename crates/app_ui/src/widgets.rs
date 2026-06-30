@@ -6,7 +6,7 @@ use bigcolor::BigColor;
 use colorhash::ColorHash;
 use domain::{PackageSummary, Source};
 use repose_core::*;
-use repose_material::material3::Button;
+use repose_material::material3::{Button, ButtonConfig};
 use repose_ui::*;
 
 fn badge(label: &str, fg: &str, bg: &str) -> View {
@@ -93,12 +93,13 @@ pub fn chip(label: &str, on: bool, on_click: impl Fn() + 'static) -> View {
             .border(1.0, Color::from_hex(border), 999.0)
             .clip_rounded(999.0),
         on_click,
+        ButtonConfig::default(),
         || Text(label).size(FONT_SM).color(Color::from_hex(fg)),
     )
 }
 
 pub fn primary_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(BLUE_BG, BLUE_BORDER), on_click, || {
+    Button(pill(BLUE_BG, BLUE_BORDER), on_click, ButtonConfig::default(), || {
         Text(label)
             .size(FONT_BASE)
             .color(Color::from_hex(TEXT_PRIMARY))
@@ -106,7 +107,7 @@ pub fn primary_button(label: &str, on_click: impl Fn() + 'static) -> View {
 }
 
 pub fn secondary_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(CHIP_OFF_BG, CHIP_OFF_BORDER), on_click, || {
+    Button(pill(CHIP_OFF_BG, CHIP_OFF_BORDER), on_click, ButtonConfig::default(), || {
         Text(label)
             .size(FONT_BASE)
             .color(Color::from_hex(TEXT_MUTED))
@@ -114,7 +115,7 @@ pub fn secondary_button(label: &str, on_click: impl Fn() + 'static) -> View {
 }
 
 pub fn success_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(GREEN_BG, GREEN_BORDER), on_click, || {
+    Button(pill(GREEN_BG, GREEN_BORDER), on_click, ButtonConfig::default(), || {
         Text(label)
             .size(FONT_BASE)
             .color(Color::from_hex(TEXT_PRIMARY))
@@ -122,7 +123,7 @@ pub fn success_button(label: &str, on_click: impl Fn() + 'static) -> View {
 }
 
 pub fn danger_button(label: &str, on_click: impl Fn() + 'static) -> View {
-    Button(pill(RED_BG, RED_BORDER), on_click, || {
+    Button(pill(RED_BG, RED_BORDER), on_click, ButtonConfig::default(), || {
         Text(label).size(FONT_BASE).color(Color::from_hex(RED))
     })
 }

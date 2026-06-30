@@ -1,4 +1,5 @@
 pub mod appstream;
+pub mod config;
 
 use crossbeam_channel as chan;
 use parking_lot::Mutex;
