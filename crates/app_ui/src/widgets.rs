@@ -7,7 +7,7 @@ use colorhash::ColorHash;
 use domain::{PackageSummary, Source};
 use repose_core::*;
 use repose_material::material3::{Button, ButtonConfig, Card, CardConfig, FilledTonalButton, OutlinedButton};
-use repose_ui::*;
+use repose_ui::{TextStyle, *};
 
 fn badge(label: &str, fg: &str, bg: &str) -> View {
     Text(label.to_string())

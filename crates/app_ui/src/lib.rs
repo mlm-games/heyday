@@ -3,12 +3,12 @@ use crate::theme::*;
 use crate::widgets::*;
 use domain::{PackageDetails, PackageSummary, Source};
 use repose_core::*;
-use repose_material::material3::dialog::{Dialog, DialogState};
+use repose_material::material3::dialog::{Dialog, DialogProperties, DialogState};
 use repose_material::material3::{
     Button, ButtonConfig, Card, CardConfig, CenterAlignedTopAppBar, Checkbox, CheckboxConfig,
     ChipColors, ChipConfig, DividerConfig, FilterChip, HorizontalDivider, IconButton,
     IconButtonColors, IconButtonConfig, LinearProgressIndicator, LinearProgressIndicatorConfig,
-    ListItem, ListItemConfig, Segment, SegmentedButton, SegmentedButtonConfig, Surface,
+    ListItem, ListItemConfig, SegmentConfig, SegmentedButton, SegmentedButtonConfig, Surface,
     SurfaceConfig, Switch, SwitchConfig, TopAppBarColors, TopAppBarConfig,
 };
 use repose_material::{Icon, material_symbols};
@@ -23,6 +23,7 @@ use repose_navigation::{
 };
 use repose_ui::overlay::OverlayHandle;
 use repose_ui::{
+    TextStyle,
     lazy::LazyColumn,
     lazy_states::LazyColumnState,
     scroll::{ScrollArea, remember_scroll_state},
@@ -106,45 +107,48 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
     )
     .child((
         Row(Modifier::new().fill_max_width()).child((
-            repose_ui::BasicTextField(
-                "Search packages…",
-                s.query.clone(),
-                Modifier::new()
-                    .flex_grow(1.0)
-                    .fill_max_width()
-                    // .max_width(500.0)
-                    .height(40.0)
-                    .padding_values(PaddingValues {
-                        left: 12.0,
-                        right: 12.0,
-                        top: 0.0,
-                        bottom: 0.0,
-                    })
-                    .background(Color::from_hex(CARD_BG))
-                    .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
-                    .clip_rounded(R_MD)
-                    .semantics(Semantics {
-                        role: Role::TextField,
-                        label: Some("Search field".into()),
-                        focused: false,
-                        enabled: true,
-                        selectable_group: false,
-                    }),
-                repose_ui::BasicTextFieldConfig {
-                    on_change: Some(Rc::new({
-                        let store = store.clone();
-                        move |text: String| store.dispatch(Action::SetQuery(text))
-                    })),
-                    on_submit: Some(Rc::new({
-                        let store = store.clone();
-                        move |text: String| {
-                            store.dispatch(Action::SetQuery(text));
-                            store.dispatch(Action::Search);
-                        }
-                    })),
-                    ..Default::default()
-                },
-            ),
+            {
+                let search_state = remember_state(|| TextFieldState::new());
+                repose_ui::BasicTextField(
+                    search_state,
+                    Modifier::new()
+                        .flex_grow(1.0)
+                        .fill_max_width()
+                        .height(40.0)
+                        .padding_values(PaddingValues {
+                            left: 12.0,
+                            right: 12.0,
+                            top: 0.0,
+                            bottom: 0.0,
+                        })
+                        .background(Color::from_hex(CARD_BG))
+                        .border(1.0, Color::from_hex(CARD_BORDER), R_MD)
+                        .clip_rounded(R_MD)
+                        .semantics(Semantics {
+                            role: Role::TextField,
+                            label: Some("Search field".into()),
+                            focused: false,
+                            enabled: true,
+                            selectable_group: false,
+                        }),
+                    "Search packages…",
+                    TextFieldConfig {
+                        line_limits: TextFieldLineLimits::SingleLine,
+                        on_change: Some(Rc::new({
+                            let store = store.clone();
+                            move |text: String| store.dispatch(Action::SetQuery(text))
+                        })),
+                        on_submit: Some(Rc::new({
+                            let store = store.clone();
+                            move |text: String| {
+                                store.dispatch(Action::SetQuery(text));
+                                store.dispatch(Action::Search);
+                            }
+                        })),
+                        ..Default::default()
+                    },
+                )
+            },
             Space(Modifier::new().width(8.0)),
             IconButton(
                 Icon(Symbols::SEARCH).color(Color::from_hex(TEXT_PRIMARY)),
@@ -159,6 +163,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                         disabled_container_color: Color::from_hex(SEL_BG),
                         disabled_content_color: Color::from_hex(TEXT_DIMMED),
                     },
+                    container_size: Some(40.0),
                     ..Default::default()
                 },
             ),
@@ -256,7 +261,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                         SortMode::NameDesc => 2,
                     }],
                     vec![
-                        Segment {
+                        SegmentConfig {
                             label: "Popular".into(),
                             icon: None,
                             on_click: Rc::new({
@@ -264,8 +269,9 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                                 move || store.dispatch(Action::SetSort(SortMode::Popularity))
                             }),
                             enabled: true,
+                            interaction_source: None,
                         },
-                        Segment {
+                        SegmentConfig {
                             label: "A-Z".into(),
                             icon: None,
                             on_click: Rc::new({
@@ -273,8 +279,9 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                                 move || store.dispatch(Action::SetSort(SortMode::NameAsc))
                             }),
                             enabled: true,
+                            interaction_source: None,
                         },
-                        Segment {
+                        SegmentConfig {
                             label: "Z-A".into(),
                             icon: None,
                             on_click: Rc::new({
@@ -282,6 +289,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
                                 move || store.dispatch(Action::SetSort(SortMode::NameDesc))
                             }),
                             enabled: true,
+                            interaction_source: None,
                         },
                     ],
                     SegmentedButtonConfig {
@@ -402,23 +410,34 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
     LazyColumn(
         results,
         76.0,
-        remember_with_key("pkg_scroll", LazyColumnState::new),
-        Modifier::new()
-            .fill_max_width()
-            .weight(1.0)
-            .clip_rounded(R_SM)
-            .padding(4.0),
         |pkg: &PackageSummary| {
             let mut h: u64 = 0;
             for b in pkg.id.name.bytes() {
                 h = h.wrapping_mul(31).wrapping_add(b as u64);
             }
+            for b in format!("{:?}", pkg.id.source).bytes() {
+                h = h.wrapping_mul(31).wrapping_add(b as u64);
+            }
+            if let Some(ref r) = pkg.id.repo {
+                for b in r.bytes() {
+                    h = h.wrapping_mul(31).wrapping_add(b as u64);
+                }
+            }
             h
         },
-        None::<repose_core::animation::AnimationSpec>,
         move |pkg: PackageSummary, _| {
             let is_sel = selected.as_ref().is_some_and(|id| *id == pkg.id);
             pkg_row(store.clone(), pkg, is_sel, upgrades_mode)
+        },
+        LazyColumnConfig {
+            modifier: Modifier::new()
+                .fill_max_width()
+                .weight(1.0)
+                .clip_rounded(R_SM)
+                .padding(4.0),
+            state: remember_with_key("pkg_scroll", LazyColumnState::new),
+            animate_spec: None::<repose_core::animation::AnimationSpec>,
+            ..Default::default()
         },
     )
 }
@@ -704,6 +723,7 @@ fn settings_view(store: Rc<Store>, overlay: OverlayHandle, s: &AppState) -> View
     let backend_item =
         move |label: &str, desc: &str, badge: View, enabled: bool, backend_key: &str| {
             let key = backend_key.to_string();
+
             ListItem(
                 label,
                 Some(desc.into()),
@@ -825,6 +845,7 @@ fn settings_view(store: Rc<Store>, overlay: OverlayHandle, s: &AppState) -> View
                 upgrade_dialog_state.clone(),
                 overlay,
                 Modifier::new(),
+                DialogProperties::default(),
                 Column(Modifier::new().padding(20.0).min_width(320.0)).with_children(vec![
                     Text("Upgrade all sources".to_string())
                         .size(FONT_LG)

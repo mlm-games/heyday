@@ -36,11 +36,11 @@ packagekit-zbus = "0.2"
 ureq = { version = "3", features = ["json"] }
 
 # UI
-repose-ui = "0.19.10"
-repose-core = "0.19.10"
-repose-platform = { version = "0.19.10" }
-repose-material = "0.19.10"
-repose-navigation = "0.19.10"
+repose-ui = "0.20"
+repose-core = "0.20"
+repose-platform = "0.20"
+repose-material = "0.20"
+repose-navigation = "0.20"
 colorhash = "0.1"
 bigcolor = "1.2"
 rfd = "0.17"
