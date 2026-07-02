@@ -1041,6 +1041,7 @@ pub fn root_view(store: Rc<Store>, overlay: OverlayHandle) -> View {
     }
 
     let overlay_surface = overlay.clone();
+    let scroll = remember_scroll_state("review_diff");
     Column(Modifier::new().fill_max_size()).with_children(vec![
         Surface(
             SurfaceConfig {
@@ -1073,7 +1074,11 @@ pub fn root_view(store: Rc<Store>, overlay: OverlayHandle) -> View {
             overlay.clone(),
             Modifier::new(),
             DialogProperties::default(),
-            Column(Modifier::new().fill_max_width().max_height(600.0)).with_children(rows),
+            ScrollArea(
+                Modifier::new().fill_max_width().max_height(600.0),
+                scroll,
+                Column(Modifier::new()).with_children(rows),
+            ),
         ),
     ])
 }
