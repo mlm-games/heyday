@@ -52,12 +52,13 @@ impl AurBackend {
         Self
     }
 
-    fn build_package(
+    fn prepare_package(
         &self,
         id: &PackageId,
+        version: &str,
         sink: &ProgressSink,
         cancel: &CancelToken,
-    ) -> Result<(tempfile::TempDir, PathBuf)> {
+    ) -> Result<PreparedPkg> {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -124,8 +125,41 @@ impl AurBackend {
         }
 
         let srcinfo = String::from_utf8_lossy(&out.stdout);
-        let all_deps = parse_srcinfo_deps(&srcinfo);
-        let missing: Vec<&String> = all_deps
+        let deps = parse_srcinfo_deps(&srcinfo);
+        let conflicts = parse_conflicts(&srcinfo);
+
+        Ok(PreparedPkg {
+            work,
+            dir,
+            id: id.clone(),
+            version: version.to_string(),
+            deps,
+            conflicts,
+        })
+    }
+
+    fn build_prepared(
+        &self,
+        pkg: &PreparedPkg,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<PathBuf> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let send_log = |stage: Stage, msg: &str, warning: bool| {
+            let _ = sink.send(Progress {
+                job_id: 0,
+                stage,
+                percent: None,
+                bytes: None,
+                log: Some(msg.into()),
+                warning,
+            });
+        };
+
+        let missing: Vec<&String> = pkg
+            .deps
             .iter()
             .filter(|d| {
                 Command::new("pacman")
@@ -174,13 +208,13 @@ impl AurBackend {
 
         send_log(
             Stage::Building,
-            &format!("running makepkg for {}", id.name),
+            &format!("running makepkg for {}", pkg.id.name),
             false,
         );
 
         let status = Command::new("makepkg")
             .args(["--noconfirm"])
-            .current_dir(&dir)
+            .current_dir(&pkg.dir)
             .status()
             .map_err(|e| Error::Internal(e.to_string()))?;
         if !status.success() {
@@ -191,10 +225,19 @@ impl AurBackend {
             return Err(Error::Cancelled);
         }
 
-        let pkg = find_built_pkg(&id.name, &dir)
-            .ok_or_else(|| Error::Aur("no built package found".into()))?;
+        find_built_pkg(&pkg.id.name, &pkg.dir)
+            .ok_or_else(|| Error::Aur("no built package found".into()))
+    }
 
-        Ok((work, pkg))
+    fn build_package(
+        &self,
+        id: &PackageId,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<(tempfile::TempDir, PathBuf)> {
+        let pkg = self.prepare_package(id, "", sink, cancel)?;
+        let pkg_path = self.build_prepared(&pkg, sink, cancel)?;
+        Ok((pkg.work, pkg_path))
     }
 
     fn pkexec_install(&self, pkgs: &[PathBuf], sink: &ProgressSink) -> Result<()> {
@@ -216,11 +259,7 @@ impl AurBackend {
 
         send_log(
             Stage::Installing,
-            &format!(
-                "installing {} package(s): {}",
-                pkgs.len(),
-                names.join(", ")
-            ),
+            &format!("installing {} package(s): {}", pkgs.len(), names.join(", ")),
             false,
         );
 
@@ -308,6 +347,87 @@ fn find_built_pkg(name: &str, dir: &PathBuf) -> Option<PathBuf> {
                 .is_some_and(|s| s.starts_with(&prefix));
             ext && stem
         })
+}
+
+fn parse_conflicts(srcinfo: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in srcinfo.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("conflicts = ") {
+            out.push(strip_ver(v));
+        }
+    }
+    out
+}
+
+fn needs_build(name: &str, version: &str) -> bool {
+    if version.is_empty() {
+        return true;
+    }
+    Command::new("pacman")
+        .args(["-Q", name])
+        .output()
+        .ok()
+        .is_none_or(|o| {
+            if !o.status.success() {
+                return true;
+            }
+            let out = String::from_utf8_lossy(&o.stdout);
+            !out.trim().contains(version)
+        })
+}
+
+struct PreparedPkg {
+    work: tempfile::TempDir,
+    dir: PathBuf,
+    id: PackageId,
+    version: String,
+    deps: Vec<String>,
+    conflicts: Vec<String>,
+}
+
+fn sort_build_order(pkgs: &[PreparedPkg]) -> Result<Vec<usize>> {
+    let n = pkgs.len();
+    let mut in_degree = vec![0; n];
+    let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+
+    let name_to_idx: HashMap<&str, usize> = pkgs
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id.name.as_str(), i))
+        .collect();
+
+    for (i, pkg) in pkgs.iter().enumerate() {
+        for dep in &pkg.deps {
+            if let Some(&j) = name_to_idx.get(dep.as_str()) {
+                adj.entry(j).or_default().push(i);
+                in_degree[i] += 1;
+            }
+        }
+    }
+
+    let mut queue: Vec<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+    let mut order = Vec::new();
+
+    while let Some(i) = queue.pop() {
+        order.push(i);
+        if let Some(neighbors) = adj.get(&i) {
+            for &j in neighbors {
+                in_degree[j] -= 1;
+                if in_degree[j] == 0 {
+                    queue.push(j);
+                }
+            }
+        }
+    }
+
+    if order.len() != n {
+        return Err(Error::Aur(
+            "circular dependency detected in AUR packages".into(),
+        ));
+    }
+
+    Ok(order)
 }
 
 fn foreign_packages() -> Vec<(String, String)> {
@@ -871,14 +991,76 @@ impl PackageBackend for AurBackend {
         if updates.is_empty() {
             return Ok(());
         }
-        let mut built = Vec::new();
+
+        // 1: prepare all (clone + printsrcinfo + parse deps/conflicts)
+        let mut prepared = Vec::new();
         for pkg in &updates {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            built.push(self.build_package(&pkg.id, sink, cancel)?);
+            prepared.push(self.prepare_package(&pkg.id, &pkg.version, sink, cancel)?);
         }
-        let paths: Vec<PathBuf> = built.iter().map(|(_, p): &(tempfile::TempDir, PathBuf)| p.clone()).collect();
-        self.pkexec_install(&paths, sink)
+
+        // 2: check for conflicts
+        for p in &prepared {
+            for conflict in &p.conflicts {
+                if p.id.name == *conflict {
+                    continue;
+                }
+                if prepared.iter().any(|q| q.id.name == *conflict) {
+                    let _ = sink.send(Progress {
+                        job_id: 0,
+                        stage: Stage::Resolving,
+                        percent: None,
+                        bytes: None,
+                        log: Some(format!(
+                            "conflict: {} and {} in same batch",
+                            p.id.name, conflict
+                        )),
+                        warning: true,
+                    });
+                }
+                if Command::new("pacman")
+                    .args(["-Q", conflict])
+                    .output()
+                    .ok()
+                    .is_some_and(|o| o.status.success())
+                {
+                    let _ = sink.send(Progress {
+                        job_id: 0,
+                        stage: Stage::Resolving,
+                        percent: None,
+                        bytes: None,
+                        log: Some(format!(
+                            "conflict: {} conflicts with installed {}",
+                            p.id.name, conflict
+                        )),
+                        warning: true,
+                    });
+                }
+            }
+        }
+
+        // 3: topological sort by dependencies
+        let order = sort_build_order(&prepared)?;
+
+        // 4: build in dependency order
+        let mut built = Vec::new();
+        for &idx in &order {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let p = &prepared[idx];
+            if needs_build(&p.id.name, &p.version) {
+                built.push(self.build_prepared(p, sink, cancel)?);
+            }
+        }
+
+        // 5: single pkexec install for all
+        if built.is_empty() {
+            Ok(())
+        } else {
+            self.pkexec_install(&built, sink)
+        }
     }
 }
