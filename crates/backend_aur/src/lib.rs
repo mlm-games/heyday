@@ -128,9 +128,10 @@ impl AurBackend {
             return Err(Error::Cancelled);
         }
 
-        let srcinfo = String::from_utf8_lossy(&out.stdout);
+        let srcinfo = String::from_utf8_lossy(&out.stdout).to_string();
         let deps = parse_srcinfo_deps(&srcinfo);
         let conflicts = parse_conflicts(&srcinfo);
+        save_cached_srcinfo(&id.name, &srcinfo);
 
         Ok(PreparedPkg {
             work,
@@ -432,6 +433,41 @@ fn sort_build_order(pkgs: &[PreparedPkg]) -> Result<Vec<usize>> {
     }
 
     Ok(order)
+}
+
+fn srcinfo_cache_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".cache/soredowe/srcinfo")
+}
+
+fn cached_srcinfo(name: &str) -> Option<String> {
+    let path = srcinfo_cache_dir().join(format!("{name}.srcinfo"));
+    fs::read_to_string(&path).ok()
+}
+
+fn save_cached_srcinfo(name: &str, content: &str) {
+    let dir = srcinfo_cache_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(format!("{name}.srcinfo")), content);
+}
+
+fn compute_diff(old: &str, new: &str) -> String {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old, new);
+    let mut out = String::new();
+    for change in diff.iter_all_changes() {
+        let tag = match change.tag() {
+            ChangeTag::Delete => '-',
+            ChangeTag::Insert => '+',
+            ChangeTag::Equal => ' ',
+        };
+        out.push(tag);
+        out.push_str(change.value());
+        if !change.value().ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn foreign_packages() -> Vec<(String, String)> {
@@ -1068,5 +1104,47 @@ impl PackageBackend for AurBackend {
         } else {
             self.pkexec_install(&built, sink)
         }
+    }
+
+    fn review_upgrade(
+        &self,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Vec<(PackageId, String)> {
+        let Ok(updates) = self.updates(cancel) else {
+            return vec![];
+        };
+        if updates.is_empty() {
+            return vec![];
+        }
+        let send_log = |stage: Stage, msg: &str, warning: bool| {
+            let _ = sink.send(Progress {
+                job_id: 0,
+                stage,
+                percent: None,
+                bytes: None,
+                log: Some(msg.into()),
+                warning,
+            });
+        };
+        let mut diffs = Vec::new();
+        for pkg in &updates {
+            if cancel.is_cancelled() {
+                return diffs;
+            }
+            send_log(
+                Stage::Resolving,
+                &format!("reviewing {} {}", pkg.id.name, pkg.version),
+                false,
+            );
+            let Ok(prepared) = self.prepare_package(&pkg.id, &pkg.version, sink, cancel) else {
+                continue;
+            };
+            let new_srcinfo = fs::read_to_string(prepared.dir.join(".SRCINFO")).unwrap_or_default();
+            let old_srcinfo = cached_srcinfo(&pkg.id.name).unwrap_or_default();
+            let diff = compute_diff(&old_srcinfo, &new_srcinfo);
+            diffs.push((pkg.id.clone(), diff));
+        }
+        diffs
     }
 }

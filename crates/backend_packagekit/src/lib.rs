@@ -207,7 +207,8 @@ impl PackageBackend for PackageKitBackend {
         txn.resolve(filter, &[q])
             .map_err(|e| Error::PackageKit(e.to_string()))?;
 
-        let (_details, packages) = collect(txn, cancel, &mut send_progress(sink, Stage::Searching))?;
+        let (_details, packages) =
+            collect(txn, cancel, &mut send_progress(sink, Stage::Searching))?;
 
         let mut results: Vec<PackageSummary> = packages
             .into_iter()
@@ -241,7 +242,8 @@ impl PackageBackend for PackageKitBackend {
         let txn = self.txn()?;
         txn.resolve(Filter::Newest as u64 | Filter::Arch as u64, &[&id.name])
             .map_err(|e| Error::PackageKit(e.to_string()))?;
-        let (_details, packages) = collect(txn, cancel, &mut send_progress(sink, Stage::Searching))?;
+        let (_details, packages) =
+            collect(txn, cancel, &mut send_progress(sink, Stage::Searching))?;
 
         let first_pkg = packages
             .first()

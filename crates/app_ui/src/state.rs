@@ -65,6 +65,7 @@ pub struct AppState {
     pub progress_pct: Option<f32>,
 
     pub settings: Settings,
+    pub review_diffs: Option<Vec<(PackageId, String)>>,
 }
 
 impl AppState {
@@ -146,6 +147,8 @@ pub enum Action {
     OpenSettings,
     SetBackendEnabled { backend: String, enabled: bool },
     SetUpgradeAllSource { backend: String, enabled: bool },
+    ReviewAur,
+    BuildAfterReview,
 }
 
 pub struct Store {
@@ -293,6 +296,28 @@ impl Store {
                 self.send_job(JobKind::UpgradeAll, JobPayload::BackendSelection(selected));
             }
 
+            Action::ReviewAur => {
+                self.send_job(
+                    JobKind::ReviewAur,
+                    JobPayload::BackendSelection(vec!["aur".into()]),
+                );
+            }
+
+            Action::BuildAfterReview => {
+                s.review_diffs = None;
+                let selected: Vec<String> = [
+                    ("repo", s.settings.upgrade_repo),
+                    ("aur", s.settings.upgrade_aur),
+                    ("flatpak", s.settings.upgrade_flatpak),
+                    ("appimage", s.settings.upgrade_appimage),
+                ]
+                .into_iter()
+                .filter(|(_, enabled)| *enabled)
+                .map(|(name, _)| name.to_string())
+                .collect();
+                self.send_job(JobKind::UpgradeAll, JobPayload::BackendSelection(selected));
+            }
+
             Action::Upgrade(id) => {
                 self.send_job(JobKind::Upgrade, JobPayload::Package(id));
             }
@@ -378,6 +403,9 @@ impl Store {
                         nav.pop();
                     }
                     self.refresh_current_view(&s);
+                }
+                Event::AurReview { diffs } => {
+                    s.review_diffs = Some(diffs);
                 }
                 Event::Error(msg) => {
                     self.show_snackbar(msg);

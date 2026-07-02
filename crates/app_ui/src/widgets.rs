@@ -6,7 +6,9 @@ use bigcolor::BigColor;
 use colorhash::ColorHash;
 use domain::{PackageSummary, Source};
 use repose_core::*;
-use repose_material::material3::{Button, ButtonConfig, Card, CardConfig, FilledTonalButton, OutlinedButton};
+use repose_material::material3::{
+    Button, ButtonConfig, Card, CardConfig, FilledTonalButton, OutlinedButton,
+};
 use repose_ui::{TextStyle, *};
 
 fn badge(label: &str, fg: &str, bg: &str) -> View {
@@ -128,29 +130,27 @@ pub fn danger_button(label: &str, on_click: impl Fn() + 'static) -> View {
 }
 
 pub fn empty_state(title: &str, subtitle: &str) -> View {
-    Column(Modifier::new().fill_max_width()).child(
-        Card(
-            CardConfig {
-                container_color: Color::from_hex(CARD_BG),
-                border: Some((1.0, Color::from_hex(CARD_BORDER))),
-                shape_radius: R_LG,
-                ..Default::default()
-            },
-            || {
-                Column(Modifier::new().fill_max_width().padding(32.0)).child((
-                    Text(title)
-                        .size(FONT_LG)
-                        .color(Color::from_hex(TEXT_MUTED))
-                        .modifier(Modifier::new().align_self_center()),
-                    Space(Modifier::new().height(6.0)),
-                    Text(subtitle)
-                        .size(FONT_SM)
-                        .color(Color::from_hex(TEXT_DIMMED))
-                        .modifier(Modifier::new().align_self_center()),
-                ))
-            },
-        ),
-    )
+    Column(Modifier::new().fill_max_width()).child(Card(
+        CardConfig {
+            container_color: Color::from_hex(CARD_BG),
+            border: Some((1.0, Color::from_hex(CARD_BORDER))),
+            shape_radius: R_LG,
+            ..Default::default()
+        },
+        || {
+            Column(Modifier::new().fill_max_width().padding(32.0)).child((
+                Text(title)
+                    .size(FONT_LG)
+                    .color(Color::from_hex(TEXT_MUTED))
+                    .modifier(Modifier::new().align_self_center()),
+                Space(Modifier::new().height(6.0)),
+                Text(subtitle)
+                    .size(FONT_SM)
+                    .color(Color::from_hex(TEXT_DIMMED))
+                    .modifier(Modifier::new().align_self_center()),
+            ))
+        },
+    ))
 }
 
 /// Labelled metadata row:  "Label    value"

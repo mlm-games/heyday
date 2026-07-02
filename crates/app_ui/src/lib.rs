@@ -56,7 +56,18 @@ fn top_bar(store: &Rc<Store>, s: &AppState) -> View {
             if s.in_upgrades_view && !s.results.is_empty() {
                 success_button("Upgrade all", {
                     let store = store.clone();
-                    move || store.dispatch(Action::UpgradeAll)
+                    move || {
+                        let st = store.state.get();
+                        let has_aur = st
+                            .results
+                            .iter()
+                            .any(|p| p.id.source == Source::Aur && st.settings.upgrade_aur);
+                        if has_aur {
+                            store.dispatch(Action::ReviewAur);
+                        } else {
+                            store.dispatch(Action::UpgradeAll);
+                        }
+                    }
                 })
             } else {
                 Box(Modifier::new())
@@ -975,30 +986,94 @@ pub fn root_view(store: Rc<Store>, overlay: OverlayHandle) -> View {
         stack: (*stack).clone(),
     });
 
-    Surface(
-        SurfaceConfig {
-            modifier: Modifier::new()
-                .fill_max_size()
-                .background_brush(v_gradient(BG_START, BG_END)),
-            ..Default::default()
-        },
-        || {
-            NavDisplay(
-                stack.clone(),
-                renderer(move |scope: &EntryScope<Route>| match scope.key() {
-                    Route::Home => home_view(store.clone()),
-                    Route::Detail(_) => {
-                        let s = store.state.get();
-                        detail_overlay(store.clone(), &s)
-                    }
-                    Route::Settings => {
-                        let s = store.state.get();
-                        settings_view(store.clone(), overlay.clone(), &s)
+    let review_state = remember(DialogState::new);
+    let prev_review = remember(|| std::cell::Cell::new(false));
+    let has_review = store.state.get().review_diffs.is_some();
+    if has_review && !prev_review.get() {
+        review_state.show();
+    }
+    prev_review.set(has_review);
+
+    let mut rows: Vec<View> = Vec::new();
+    if let Some(diffs) = &store.state.get().review_diffs {
+        for (i, (id, diff_text)) in diffs.iter().enumerate() {
+            if i > 0 {
+                rows.push(HorizontalDivider(DividerConfig {
+                    color: Color::from_hex(CARD_BORDER),
+                    ..Default::default()
+                }));
+            }
+            rows.push(
+                Text(id.name.clone())
+                    .size(FONT_BASE)
+                    .color(Color::from_hex(TEXT_PRIMARY))
+                    .modifier(Modifier::new().padding(8.0)),
+            );
+            for line in diff_text.lines() {
+                let (color, display) = if let Some(c) = line.strip_prefix('+') {
+                    (Color::from_hex("4CAF50"), format!("+{c}"))
+                } else if let Some(c) = line.strip_prefix('-') {
+                    (Color::from_hex("F44336"), format!("-{c}"))
+                } else if let Some(c) = line.strip_prefix(' ') {
+                    (Color::from_hex(TEXT_DIMMED), format!(" {c}"))
+                } else {
+                    (Color::from_hex(TEXT_DIMMED), line.to_string())
+                };
+                rows.push(Text(display).size(FONT_XS).color(color));
+            }
+        }
+        let store_c = store.clone();
+        let state_c = review_state.clone();
+        let state_c2 = state_c.clone();
+        rows.push(
+            Row(Modifier::new().fill_max_width().padding(8.0)).with_children(vec![
+                Space(Modifier::new().flex_grow(1.0)),
+                secondary_button("Cancel", move || state_c.dismiss()),
+                Space(Modifier::new().width(8.0)),
+                success_button("Build", {
+                    move || {
+                        store_c.dispatch(Action::BuildAfterReview);
+                        state_c2.dismiss();
                     }
                 }),
-                None,
-                NavTransition::default(),
-            )
-        },
-    )
+            ]),
+        );
+    }
+
+    let overlay_surface = overlay.clone();
+    Column(Modifier::new().fill_max_size()).with_children(vec![
+        Surface(
+            SurfaceConfig {
+                modifier: Modifier::new()
+                    .fill_max_size()
+                    .background_brush(v_gradient(BG_START, BG_END)),
+                ..Default::default()
+            },
+            || {
+                NavDisplay(
+                    stack.clone(),
+                    renderer(move |scope: &EntryScope<Route>| match scope.key() {
+                        Route::Home => home_view(store.clone()),
+                        Route::Detail(_) => {
+                            let s = store.state.get();
+                            detail_overlay(store.clone(), &s)
+                        }
+                        Route::Settings => {
+                            let s = store.state.get();
+                            settings_view(store.clone(), overlay_surface.clone(), &s)
+                        }
+                    }),
+                    None,
+                    NavTransition::default(),
+                )
+            },
+        ),
+        Dialog(
+            review_state.clone(),
+            overlay.clone(),
+            Modifier::new(),
+            DialogProperties::default(),
+            Column(Modifier::new().fill_max_width().max_height(600.0)).with_children(rows),
+        ),
+    ])
 }

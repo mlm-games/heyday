@@ -94,6 +94,9 @@ pub enum Event {
     },
     SystemChanged,
     Error(String),
+    AurReview {
+        diffs: Vec<(PackageId, String)>,
+    },
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -187,6 +190,15 @@ pub trait PackageBackend: Send + Sync {
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()>;
 
+    /// Review AUR package changes before upgrading (returns diff text per package).
+    fn review_upgrade(
+        &self,
+        _sink: &ProgressSink,
+        _cancel: &CancelToken,
+    ) -> Vec<(PackageId, String)> {
+        vec![]
+    }
+
     /// Install a local file (AppImage, flatpakref, pkg.tar.zst, etc.)
     fn install_file(&self, _path: &str, _sink: &ProgressSink, _cancel: &CancelToken) -> Result<()> {
         Err(Error::Internal("install_file not supported".into()))
@@ -221,6 +233,7 @@ pub enum JobKind {
     Upgrade,
     UpgradeAll,
     InstallFile,
+    ReviewAur,
 }
 
 #[derive(Clone, Debug)]
@@ -475,6 +488,19 @@ impl Executor {
                                 if selected_groups.contains(&b.group()) {
                                     b.upgrade_all(&tx_local, &cancel)?;
                                 }
+                            }
+                            Ok(())
+                        }
+                        JobKind::ReviewAur => {
+                            let mut all_diffs = Vec::new();
+                            for (_, b) in selected.iter() {
+                                let diffs = b.review_upgrade(&tx_local, &cancel);
+                                all_diffs.extend(diffs);
+                            }
+                            if !all_diffs.is_empty() {
+                                tx_evt
+                                    .send(Event::AurReview { diffs: all_diffs })
+                                    .map_err(|e| Error::Internal(e.to_string()))?;
                             }
                             Ok(())
                         }
