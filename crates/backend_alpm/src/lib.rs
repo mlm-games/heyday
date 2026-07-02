@@ -9,6 +9,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+/// SAFETY: `alpm::Alpm` is `!Send` + `!Sync`, but it is wrapped it in a `Mutex` and only accessed
+/// when locked, on the executor thread.
 pub struct AlpmBackend {
     handle: Mutex<Option<alpm::Alpm>>,
 }
@@ -52,7 +54,7 @@ impl AlpmBackend {
 fn pacman_conf_repos() -> Vec<String> {
     let content = match std::fs::read_to_string("/etc/pacman.conf") {
         Ok(c) => c,
-        Err(_) => return vec!["core".into(), "extra".into(), "community".into()],
+        Err(_) => return vec!["core".into(), "extra".into()],
     };
     let mut repos = Vec::new();
     for line in content.lines() {
@@ -66,7 +68,7 @@ fn pacman_conf_repos() -> Vec<String> {
         }
     }
     if repos.is_empty() {
-        vec!["core".into(), "extra".into(), "community".into()]
+        vec!["core".into(), "extra".into()]
     } else {
         repos
     }
@@ -211,6 +213,7 @@ fn pkexec_pacman(
     stage: Stage,
 ) -> Result<()> {
     let mut cmd = Command::new("pkexec");
+    cmd.env("LC_ALL", "C");
     cmd.arg("pacman");
     cmd.args(args);
     let (code, last_err) = run_stream(cmd, sink, cancel, stage)?;
@@ -230,6 +233,7 @@ fn pkexec_pacman_args(
     stage: Stage,
 ) -> Result<()> {
     let mut cmd = Command::new("pkexec");
+    cmd.env("LC_ALL", "C");
     cmd.arg("pacman");
     cmd.args(args);
     cmd.args(&pkgs);

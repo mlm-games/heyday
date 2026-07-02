@@ -415,9 +415,7 @@ fn results_list(store: &Rc<Store>, s: &AppState) -> View {
             for b in pkg.id.name.bytes() {
                 h = h.wrapping_mul(31).wrapping_add(b as u64);
             }
-            for b in format!("{:?}", pkg.id.source).bytes() {
-                h = h.wrapping_mul(31).wrapping_add(b as u64);
-            }
+            h = h.wrapping_mul(31).wrapping_add(pkg.id.source as u64);
             if let Some(ref r) = pkg.id.repo {
                 for b in r.bytes() {
                     h = h.wrapping_mul(31).wrapping_add(b as u64);

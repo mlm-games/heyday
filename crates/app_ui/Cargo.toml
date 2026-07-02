@@ -13,4 +13,4 @@ crossbeam-channel.workspace = true
 colorhash.workspace = true
 bigcolor.workspace = true
 serde.workspace = true
-rfd = "0.15"
+rfd.workspace = true

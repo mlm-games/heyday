@@ -163,12 +163,20 @@ fn extract_desktop_entry(appimage: &str) -> Option<(String, String)> {
                 .filter(|o| o.status.success())
         })
         .or_else(|| {
-            // Fallback: --appimage-extract (like gearlever)
-            let cloned = format!("{tmpdir}/app.AppImage");
-            fs::copy(appimage, &cloned).ok()?;
-            let _ =
-                fs::set_permissions(&cloned, std::os::unix::fs::PermissionsExt::from_mode(0o755));
-            let out = std::process::Command::new(&cloned)
+            let src = std::fs::canonicalize(appimage).ok()?;
+            let executable = std::fs::metadata(&src)
+                .ok()
+                .map(|m| m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false);
+            let runner = if executable {
+                src
+            } else {
+                let cloned = format!("{tmpdir}/app.AppImage");
+                fs::copy(&src, &cloned).ok()?;
+                fs::set_permissions(&cloned, PermissionsExt::from_mode(0o755)).ok()?;
+                cloned.into()
+            };
+            let out = std::process::Command::new(&runner)
                 .args(["--appimage-extract"])
                 .current_dir(&tmpdir)
                 .output()
@@ -666,6 +674,7 @@ impl PackageBackend for AppImageBackend {
         let mut file = File::create(&tmp).map_err(|e| Error::AppImage(e.to_string()))?;
         let mut buf = [0u8; 65536];
         let mut downloaded = 0u64;
+        let mut last_progress = std::time::Instant::now();
 
         loop {
             if cancel.is_cancelled() {
@@ -681,7 +690,7 @@ impl PackageBackend for AppImageBackend {
             file.write_all(&buf[..n])
                 .map_err(|e| Error::AppImage(e.to_string()))?;
             downloaded += n as u64;
-            if total > 0 {
+            if total > 0 && (last_progress.elapsed() >= std::time::Duration::from_millis(100) || downloaded == total) {
                 let pct = downloaded as f32 / total as f32;
                 let _ = sink.send(Progress {
                     job_id: 0,
@@ -691,6 +700,7 @@ impl PackageBackend for AppImageBackend {
                     log: None,
                     warning: false,
                 });
+                last_progress = std::time::Instant::now();
             }
         }
 
@@ -904,6 +914,7 @@ impl PackageBackend for AppImageBackend {
         let mut file = File::create(&tmp).map_err(|e| Error::AppImage(e.to_string()))?;
         let mut buf = [0u8; 65536];
         let mut downloaded = 0u64;
+        let mut last_progress = std::time::Instant::now();
 
         loop {
             if cancel.is_cancelled() {
@@ -919,7 +930,7 @@ impl PackageBackend for AppImageBackend {
             file.write_all(&buf[..n])
                 .map_err(|e| Error::AppImage(e.to_string()))?;
             downloaded += n as u64;
-            if total > 0 {
+            if total > 0 && (last_progress.elapsed() >= std::time::Duration::from_millis(100) || downloaded == total) {
                 let pct = downloaded as f32 / total as f32;
                 let _ = sink.send(Progress {
                     job_id: 0,
@@ -929,6 +940,7 @@ impl PackageBackend for AppImageBackend {
                     log: None,
                     warning: false,
                 });
+                last_progress = std::time::Instant::now();
             }
         }
         drop(file);
