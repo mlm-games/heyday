@@ -131,7 +131,6 @@ impl AurBackend {
         let srcinfo = String::from_utf8_lossy(&out.stdout).to_string();
         let deps = parse_srcinfo_deps(&srcinfo);
         let conflicts = parse_conflicts(&srcinfo);
-        save_cached_srcinfo(&id.name, &srcinfo);
 
         Ok(PreparedPkg {
             work,
@@ -151,6 +150,9 @@ impl AurBackend {
     ) -> Result<PathBuf> {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
+        }
+        if let Ok(srcinfo) = fs::read_to_string(pkg.dir.join(".SRCINFO")) {
+            save_cached_srcinfo(&pkg.id.name, &srcinfo);
         }
         let send_log = |stage: Stage, msg: &str, warning: bool| {
             let _ = sink.send(Progress {
@@ -1141,8 +1143,12 @@ impl PackageBackend for AurBackend {
                 continue;
             };
             let new_srcinfo = fs::read_to_string(prepared.dir.join(".SRCINFO")).unwrap_or_default();
-            let old_srcinfo = cached_srcinfo(&pkg.id.name).unwrap_or_default();
+            let old_srcinfo = match cached_srcinfo(&pkg.id.name) {
+                Some(ref cached) if *cached != new_srcinfo => cached.clone(),
+                _ => String::new(),
+            };
             let diff = compute_diff(&old_srcinfo, &new_srcinfo);
+            save_cached_srcinfo(&pkg.id.name, &new_srcinfo);
             diffs.push((pkg.id.clone(), diff));
         }
         diffs
