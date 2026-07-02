@@ -440,6 +440,8 @@ impl PackageBackend for AppImageBackend {
             description: description.or_else(|| entry.and_then(|e| e.long_description.clone())),
             depends: vec![],
             opt_depends: vec![],
+            makedepends: vec![],
+            conflicts: vec![],
             homepage: entry.and_then(|e| e.homepage.clone()),
             license: entry.and_then(|e| e.license.clone()),
             maintainer: None,

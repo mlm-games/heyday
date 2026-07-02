@@ -396,6 +396,8 @@ impl PackageBackend for AlpmBackend {
                         .map(|d| d.name().to_string())
                         .filter(|s| !s.is_empty())
                         .collect(),
+                    makedepends: vec![],
+                    conflicts: vec![],
                     homepage: pkg.url().map(|s| s.to_string()),
                     license: pkg.licenses().first().map(|s| s.to_string()),
                     maintainer: pkg.packager().map(|s| s.to_string()),

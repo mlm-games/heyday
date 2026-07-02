@@ -379,6 +379,8 @@ impl PackageBackend for FlatpakBackend {
             }),
             depends: vec![],
             opt_depends: vec![],
+            makedepends: vec![],
+            conflicts: vec![],
             homepage: info.as_ref().and_then(|i| i.homepage.clone()),
             license: info.as_ref().and_then(|i| i.license.clone()),
             maintainer: None,

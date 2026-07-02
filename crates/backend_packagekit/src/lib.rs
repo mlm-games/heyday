@@ -260,6 +260,8 @@ impl PackageBackend for PackageKitBackend {
             description: None,
             depends: vec![],
             opt_depends: vec![],
+            makedepends: vec![],
+            conflicts: vec![],
             homepage: None,
             license: None,
             maintainer: None,

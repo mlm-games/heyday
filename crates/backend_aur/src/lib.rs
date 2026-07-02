@@ -40,8 +40,12 @@ pub struct AurPkg {
     license: Option<Vec<String>>,
     #[serde(rename = "Depends")]
     depends: Option<Vec<String>>,
+    #[serde(rename = "MakeDepends")]
+    makedepends: Option<Vec<String>>,
     #[serde(rename = "OptDepends")]
     optdepends: Option<Vec<String>>,
+    #[serde(rename = "Conflicts")]
+    conflicts: Option<Vec<String>>,
     #[serde(rename = "PackageBase")]
     package_base: Option<String>,
 }
@@ -945,6 +949,8 @@ impl PackageBackend for AurBackend {
             description: None,
             depends: p.depends.unwrap_or_default(),
             opt_depends: opt_names,
+            makedepends: p.makedepends.unwrap_or_default(),
+            conflicts: p.conflicts.unwrap_or_default(),
             homepage: p.url,
             license: p.license.as_ref().map(|v| v.join(", ")),
             maintainer: p.maintainer,

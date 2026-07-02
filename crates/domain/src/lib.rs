@@ -44,6 +44,8 @@ pub struct PackageDetails {
     pub description: Option<String>,
     pub depends: Vec<String>,
     pub opt_depends: Vec<String>,
+    pub makedepends: Vec<String>,
+    pub conflicts: Vec<String>,
     pub homepage: Option<String>,
     pub license: Option<String>,
     pub maintainer: Option<String>,

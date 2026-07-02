@@ -575,8 +575,14 @@ fn details_body(det: &PackageDetails) -> View {
     if !det.depends.is_empty() {
         rows.push(tag_list("Dependencies", &det.depends));
     }
+    if !det.makedepends.is_empty() {
+        rows.push(tag_list("Build deps", &det.makedepends));
+    }
     if !det.opt_depends.is_empty() {
         rows.push(tag_list("Optional deps", &det.opt_depends));
+    }
+    if !det.conflicts.is_empty() {
+        rows.push(tag_list("Conflicts", &det.conflicts));
     }
 
     Column(Modifier::new().fill_max_width()).child(rows)
