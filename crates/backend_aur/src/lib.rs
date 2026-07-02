@@ -51,6 +51,209 @@ impl AurBackend {
     pub fn new() -> Self {
         Self
     }
+
+    fn build_package(
+        &self,
+        id: &PackageId,
+        sink: &ProgressSink,
+        cancel: &CancelToken,
+    ) -> Result<(tempfile::TempDir, PathBuf)> {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let send_log = |stage: Stage, msg: &str, warning: bool| {
+            let _ = sink.send(Progress {
+                job_id: 0,
+                stage,
+                percent: None,
+                bytes: None,
+                log: Some(msg.into()),
+                warning,
+            });
+        };
+
+        let pkgbase = pkgbase_for(&id.name);
+
+        send_log(Stage::Building, &format!("cloning {}.git", pkgbase), false);
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        let work = tempfile::tempdir().map_err(|e| Error::Internal(e.to_string()))?;
+        let dir = work.path().join(&pkgbase);
+
+        let dir_str = dir
+            .to_str()
+            .ok_or_else(|| Error::Internal("non-UTF-8 temp dir path".into()))?
+            .to_string();
+        let status = Command::new("git")
+            .args([
+                "clone",
+                "--depth=1",
+                &format!("https://aur.archlinux.org/{pkgbase}.git"),
+                &dir_str,
+            ])
+            .status()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        if !status.success() {
+            return Err(Error::Aur("git clone failed".into()));
+        }
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        send_log(Stage::Building, "generating .SRCINFO", false);
+
+        let out = Command::new("makepkg")
+            .arg("--printsrcinfo")
+            .current_dir(&dir)
+            .output()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        if !out.status.success() {
+            return Err(Error::Aur("printsrcinfo failed".into()));
+        }
+        let mut f =
+            fs::File::create(dir.join(".SRCINFO")).map_err(|e| Error::Internal(e.to_string()))?;
+        f.write_all(&out.stdout)
+            .map_err(|e| Error::Internal(e.to_string()))?;
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        let srcinfo = String::from_utf8_lossy(&out.stdout);
+        let all_deps = parse_srcinfo_deps(&srcinfo);
+        let missing: Vec<&String> = all_deps
+            .iter()
+            .filter(|d| {
+                Command::new("pacman")
+                    .args(["-T", d])
+                    .output()
+                    .ok()
+                    .is_none_or(|o| !o.status.success())
+            })
+            .collect();
+        if !missing.is_empty() {
+            send_log(
+                Stage::Resolving,
+                &format!(
+                    "installing deps: {}",
+                    missing
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                false,
+            );
+            let dep_status = Command::new("pkexec")
+                .args(["pacman", "-S", "--noconfirm", "--needed"])
+                .args(missing.iter().map(|s| s.as_str()))
+                .status();
+
+            match dep_status {
+                Ok(s) if !s.success() => {
+                    send_log(
+                        Stage::Resolving,
+                        &format!("dep install exited with code {}", s.code().unwrap_or(-1)),
+                        true,
+                    );
+                }
+                Err(e) => {
+                    send_log(Stage::Resolving, &format!("dep install failed: {e}"), true);
+                }
+                _ => {}
+            }
+        }
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        send_log(
+            Stage::Building,
+            &format!("running makepkg for {}", id.name),
+            false,
+        );
+
+        let status = Command::new("makepkg")
+            .args(["--noconfirm"])
+            .current_dir(&dir)
+            .status()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        if !status.success() {
+            return Err(Error::Aur("makepkg failed".into()));
+        }
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        let pkg = find_built_pkg(&id.name, &dir)
+            .ok_or_else(|| Error::Aur("no built package found".into()))?;
+
+        Ok((work, pkg))
+    }
+
+    fn pkexec_install(&self, pkgs: &[PathBuf], sink: &ProgressSink) -> Result<()> {
+        let send_log = |stage: Stage, msg: &str, warning: bool| {
+            let _ = sink.send(Progress {
+                job_id: 0,
+                stage,
+                percent: None,
+                bytes: None,
+                log: Some(msg.into()),
+                warning,
+            });
+        };
+
+        let names: Vec<&str> = pkgs
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        send_log(
+            Stage::Installing,
+            &format!(
+                "installing {} package(s): {}",
+                pkgs.len(),
+                names.join(", ")
+            ),
+            false,
+        );
+
+        let pkg_strs: Vec<String> = pkgs
+            .iter()
+            .map(|p| {
+                p.to_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| Error::Internal("non-UTF-8 package path".into()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut cmd = Command::new("pkexec");
+        cmd.arg("pacman");
+        cmd.arg("-U");
+        cmd.arg("--noconfirm");
+        for s in &pkg_strs {
+            cmd.arg(s);
+        }
+        let out = cmd.output().map_err(|e| Error::Priv(e.to_string()))?;
+
+        if out.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let detail = if stderr.trim().is_empty() {
+                "pacman -U failed: see log".into()
+            } else {
+                format!("pacman -U failed: {}", stderr.trim())
+            };
+            Err(Error::Priv(detail))
+        }
+    }
 }
 
 static HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
@@ -630,168 +833,9 @@ impl PackageBackend for AurBackend {
             size_download: None,
         })
     }
-
     fn install(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-        let send_log = |stage: Stage, msg: &str, warning: bool| {
-            let _ = sink.send(Progress {
-                job_id: 0,
-                stage,
-                percent: None,
-                bytes: None,
-                log: Some(msg.into()),
-                warning,
-            });
-        };
-
-        let pkgbase = pkgbase_for(&id.name);
-
-        send_log(Stage::Building, &format!("cloning {}.git", pkgbase), false);
-
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-
-        let work = tempfile::tempdir().map_err(|e| Error::Internal(e.to_string()))?;
-        let dir = work.path().join(&pkgbase);
-
-        let dir_str = dir
-            .to_str()
-            .ok_or_else(|| Error::Internal("non-UTF-8 temp dir path".into()))?
-            .to_string();
-        let status = Command::new("git")
-            .args([
-                "clone",
-                "--depth=1",
-                &format!("https://aur.archlinux.org/{pkgbase}.git"),
-                &dir_str,
-            ])
-            .status()
-            .map_err(|e| Error::Internal(e.to_string()))?;
-        if !status.success() {
-            return Err(Error::Aur("git clone failed".into()));
-        }
-
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-
-        send_log(Stage::Building, "generating .SRCINFO", false);
-
-        let out = Command::new("makepkg")
-            .arg("--printsrcinfo")
-            .current_dir(&dir)
-            .output()
-            .map_err(|e| Error::Internal(e.to_string()))?;
-        if !out.status.success() {
-            return Err(Error::Aur("printsrcinfo failed".into()));
-        }
-        let mut f =
-            fs::File::create(dir.join(".SRCINFO")).map_err(|e| Error::Internal(e.to_string()))?;
-        f.write_all(&out.stdout)
-            .map_err(|e| Error::Internal(e.to_string()))?;
-
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-
-        // Use pacman -T to check what's missing without requiring root
-        let srcinfo = String::from_utf8_lossy(&out.stdout);
-        let all_deps = parse_srcinfo_deps(&srcinfo);
-        let missing: Vec<&String> = all_deps
-            .iter()
-            .filter(|d| {
-                Command::new("pacman")
-                    .args(["-T", d])
-                    .output()
-                    .ok()
-                    .is_none_or(|o| !o.status.success())
-            })
-            .collect();
-        if !missing.is_empty() {
-            send_log(
-                Stage::Resolving,
-                &format!(
-                    "installing deps: {}",
-                    missing
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                false,
-            );
-            let dep_status = Command::new("pkexec")
-                .args(["pacman", "-S", "--noconfirm", "--needed"])
-                .args(missing.iter().map(|s| s.as_str()))
-                .status();
-            match dep_status {
-                Ok(s) if !s.success() => {
-                    send_log(
-                        Stage::Resolving,
-                        &format!("dep install exited with code {}", s.code().unwrap_or(-1)),
-                        true,
-                    );
-                }
-                Err(e) => {
-                    send_log(Stage::Resolving, &format!("dep install failed: {e}"), true);
-                }
-                _ => {}
-            }
-        }
-
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-
-        send_log(
-            Stage::Building,
-            &format!("running makepkg for {}", id.name),
-            false,
-        );
-
-        let status = Command::new("makepkg")
-            .args(["--noconfirm"])
-            .current_dir(&dir)
-            .status()
-            .map_err(|e| Error::Internal(e.to_string()))?;
-        if !status.success() {
-            return Err(Error::Aur("makepkg failed".into()));
-        }
-
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-
-        send_log(
-            Stage::Installing,
-            &format!("installing {} via pacman -U", id.name),
-            false,
-        );
-
-        let pkg = find_built_pkg(&id.name, &dir)
-            .ok_or_else(|| Error::Aur("no built package found".into()))?;
-        let pkg_str = pkg
-            .to_str()
-            .ok_or_else(|| Error::Internal("non-UTF-8 built package path".into()))?
-            .to_string();
-        let out = Command::new("pkexec")
-            .args(["pacman", "-U", "--noconfirm", &pkg_str])
-            .output()
-            .map_err(|e| Error::Priv(e.to_string()))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let detail = if stderr.trim().is_empty() {
-                "pacman -U failed: see log".into()
-            } else {
-                format!("pacman -U failed: {}", stderr.trim())
-            };
-            Err(Error::Priv(detail))
-        }
+        let (_work, pkg) = self.build_package(id, sink, cancel)?;
+        self.pkexec_install(&[pkg], sink)
     }
 
     fn remove(&self, id: &PackageId, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
@@ -824,12 +868,17 @@ impl PackageBackend for AurBackend {
 
     fn upgrade_all(&self, sink: &ProgressSink, cancel: &CancelToken) -> Result<()> {
         let updates = self.updates(cancel)?;
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let mut built = Vec::new();
         for pkg in &updates {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            self.install(&pkg.id, sink, cancel)?;
+            built.push(self.build_package(&pkg.id, sink, cancel)?);
         }
-        Ok(())
+        let paths: Vec<PathBuf> = built.iter().map(|(_, p): &(tempfile::TempDir, PathBuf)| p.clone()).collect();
+        self.pkexec_install(&paths, sink)
     }
 }
