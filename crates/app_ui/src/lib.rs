@@ -192,7 +192,7 @@ fn search_section(store: &Rc<Store>, s: &AppState) -> View {
             };
             Row(Modifier::new()
                 .fill_max_width()
-                .align_items(AlignItems::Center))
+                .align_items(AlignItems::CENTER))
             .child(vec![
                 FilterChip(
                     s.filter_repo,
@@ -350,7 +350,7 @@ fn pkg_row(store: Rc<Store>, pkg: PackageSummary, _selected: bool, upgrades_mode
         pkg_avatar(&pkg.id.name, AVATAR_SIZE),
         Space(Modifier::new().width(12.0)),
         Column(Modifier::new().flex_grow(1.0)).child((
-            Row(Modifier::new().align_items(AlignItems::Center)).child((
+            Row(Modifier::new().align_items(AlignItems::CENTER)).child((
                 Text(pkg.id.name.clone())
                     .size(FONT_LG)
                     .color(Color::from_hex(TEXT_PRIMARY)),
@@ -471,7 +471,7 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
         Column(Modifier::new().fill_max_size().align_self_center()).child((
             Row(Modifier::new()
                 .fill_max_width()
-                .align_items(AlignItems::Center))
+                .align_items(AlignItems::CENTER))
             .child((
                 IconButton(
                     Icon(Symbols::CHEVRON_LEFT),
@@ -489,7 +489,7 @@ fn detail_overlay(store: Rc<Store>, s: &AppState) -> View {
                 pkg_avatar(&summary.id.name, AVATAR_SIZE_LG),
                 Space(Modifier::new().width(20.0)),
                 Column(Modifier::new().flex_grow(1.0)).child((
-                    Row(Modifier::new().align_items(AlignItems::Center)).child((
+                    Row(Modifier::new().align_items(AlignItems::CENTER)).child((
                         Text(summary.id.name.clone())
                             .size(28.0)
                             .color(Color::from_hex(TEXT_PRIMARY)),
@@ -587,7 +587,7 @@ fn status_bar(store: &Rc<Store>, s: &AppState) -> View {
     let indicator = if let Some(stage) = &stage_label {
         Row(Modifier::new()
             .fill_max_width()
-            .align_items(AlignItems::Center))
+            .align_items(AlignItems::CENTER))
         .child((
             Text(stage.as_str())
                 .size(FONT_XS)
@@ -777,7 +777,7 @@ fn settings_view(store: Rc<Store>, overlay: OverlayHandle, s: &AppState) -> View
         Column(Modifier::new().fill_max_size().align_self_center()).with_children(vec![
             Row(Modifier::new()
                 .fill_max_width()
-                .align_items(AlignItems::Center))
+                .align_items(AlignItems::CENTER))
             .child((
                 IconButton(
                     Icon(Symbols::CHEVRON_LEFT),
@@ -901,7 +901,7 @@ fn upgrade_checkbox(label: &str, backend_key: &str, enabled: bool, store: &Rc<St
     let store_cb = store.clone();
     Row(Modifier::new()
         .fill_max_width()
-        .align_items(AlignItems::Center))
+        .align_items(AlignItems::CENTER))
     .child((
         Checkbox(
             enabled,
