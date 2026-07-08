@@ -62,7 +62,7 @@ jobs:
 
           package() {
             cd "${srcdir}/${pkgname}-${pkgver}"
-            install -Dm755 "target/release/app_shell" "${pkgdir}/usr/bin/soredowe"
+            install -Dm755 "target/release/soredowe-desktop" "${pkgdir}/usr/bin/soredowe"
 
             install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/soredowe.desktop" << DESKTOP_EOF
           [Desktop Entry]
