@@ -192,8 +192,7 @@ jobs:
           set -euxo pipefail
           OUTDIR="dist/${BIN_NAME}-${TAG}-${TARGET}"
           mkdir -p "$OUTDIR"
-          # Exception: Rename the built app_shell binary to soredowe in the archive
-          cp "target/${TARGET}/release/app_shell" "$OUTDIR/${BIN_NAME}"
+          cp "target/${TARGET}/release/${BIN_NAME}-desktop" "$OUTDIR/${BIN_NAME}"
           for f in README* LICENSE* CHANGELOG*; do [ -e "$f" ] && cp "$f" "$OUTDIR/" || true; done
           tar -C "dist" -czf "${OUTDIR}.tar.gz" "$(basename "$OUTDIR")"
 
