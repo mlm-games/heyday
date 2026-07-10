@@ -40,7 +40,7 @@ jobs:
       commit_sha: ${{ steps.meta.outputs.commit_sha }}
       release_notes: ${{ steps.notes.outputs.release-notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -122,7 +122,7 @@ jobs:
           #   target: ""
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare-version.outputs.commit_sha }}
 
@@ -214,7 +214,7 @@ jobs:
       #     Compress-Archive -Path "$out\*" -DestinationPath "$out.zip"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.os }}${{ matrix.target && format('-{0}', matrix.target) || '' }}
           path: |
@@ -351,7 +351,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -368,7 +368,7 @@ jobs:
 
       - name: Create/Update Release
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload_releases == true) }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare-version.outputs.tag }}
           name: ${{ needs.prepare-version.outputs.tag }}
