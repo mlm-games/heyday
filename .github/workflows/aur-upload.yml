@@ -56,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           ver="${{ inputs.version_name }}"
-          tag="${{ inputs.version_name }}"
+          tag="v${ver#v}"
           pkgver="${ver#v}"
           mkdir -p aur-package
           cat > aur-package/PKGBUILD <<'EOF'
